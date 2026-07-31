@@ -27,7 +27,7 @@ A Hugging Face token and a W&B API key are required (`HF_TOKEN`, `WANDB_API_KEY`
 ```
 data/streaming.py    # DATASET_REGISTRY (DatasetSpec incl. text_column rename) + load_streaming_dataset
 data/tokenizer.py     # train_tokenizer / encode_batch, independent of the model
-model/transformer.py  # MinimalTransformerLM: RoPE, RMSNorm, SwiGLU MLP, weight-tied embeddings/head,
+model/transformer.py  # TransformerLM: RoPE, RMSNorm, SwiGLU MLP, weight-tied embeddings/head,
                        # GQA, hand-rolled causal attention via F.scaled_dot_product_attention with
                        # is_causal=(seq_len > 1) — SDPA's non-square causal bias is top-left-aligned,
                        # not cached-decode-safe, so masking is skipped for single-token cached decode

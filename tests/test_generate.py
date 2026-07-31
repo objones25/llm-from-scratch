@@ -4,12 +4,12 @@ from tokenizers import Tokenizer
 
 from llmtrain.data.tokenizer import train_tokenizer
 from llmtrain.generate import generate, generate_token_ids
-from llmtrain.model.transformer import MinimalTransformerLM
+from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
 from llmtrain.training.config import ModelConfig
 
 
-def _tiny_setup() -> tuple[MinimalTransformerLM, Tokenizer]:
+def _tiny_setup() -> tuple[TransformerLM, Tokenizer]:
     tokenizer = train_tokenizer(["hello world", "hello there", "world hello there"], vocab_size=32)
     config = ModelConfig(
         vocab_size=tokenizer.get_vocab_size(),
@@ -20,7 +20,7 @@ def _tiny_setup() -> tuple[MinimalTransformerLM, Tokenizer]:
         max_seq_len=16,
         dropout=0.0,
     )
-    model = MinimalTransformerLM(config)
+    model = TransformerLM(config)
     return model, tokenizer
 
 
@@ -84,7 +84,7 @@ def test_generate_works_after_checkpoint_and_tokenizer_round_trip(tmp_path):
         max_seq_len=16,
         dropout=0.0,
     )
-    loaded_model = MinimalTransformerLM(loaded_config)
+    loaded_model = TransformerLM(loaded_config)
     loaded_optimizer = torch.optim.AdamW(loaded_model.parameters(), lr=0.0)
     load_checkpoint(checkpoint_path, loaded_model, loaded_optimizer)
 

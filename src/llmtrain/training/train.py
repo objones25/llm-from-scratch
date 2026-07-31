@@ -13,7 +13,7 @@ import wandb
 from llmtrain.data.streaming import load_streaming_dataset
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
-from llmtrain.model.transformer import MinimalTransformerLM
+from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
 from llmtrain.training.config import DataConfig, ModelConfig, TrainConfig
 
@@ -60,7 +60,7 @@ def train(
     model_cfg.vocab_size = tokenizer.get_vocab_size()
     model_cfg.max_seq_len = data_cfg.max_seq_len
 
-    model: torch.nn.Module = MinimalTransformerLM(model_cfg).to(device)
+    model: torch.nn.Module = TransformerLM(model_cfg).to(device)
     if device.type == "cuda" and train_cfg.compile:
         # torch.compile's stub returns a broad callable type; the object is
         # still an nn.Module at runtime, hence the explicit annotation above.

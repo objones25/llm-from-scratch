@@ -5,7 +5,7 @@ import torch
 from tokenizers import Tokenizer
 
 from llmtrain.model.cache import KVCache
-from llmtrain.model.transformer import MinimalTransformerLM
+from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.checkpoint import load_checkpoint
 from llmtrain.training.config import ModelConfig
 
@@ -18,7 +18,7 @@ def _sample(logits: torch.Tensor, temperature: float) -> int:
 
 
 def generate_token_ids(
-    model: MinimalTransformerLM,
+    model: TransformerLM,
     tokenizer: Tokenizer,
     prompt: str,
     max_new_tokens: int,
@@ -54,7 +54,7 @@ def generate_token_ids(
 
 
 def generate(
-    model: MinimalTransformerLM,
+    model: TransformerLM,
     tokenizer: Tokenizer,
     prompt: str,
     max_new_tokens: int,
@@ -91,7 +91,7 @@ def main() -> None:
         model_cfg = ModelConfig(**{**saved_model_config, "vocab_size": tokenizer.get_vocab_size()})
     else:
         model_cfg = ModelConfig(vocab_size=tokenizer.get_vocab_size())
-    model = MinimalTransformerLM(model_cfg)
+    model = TransformerLM(model_cfg)
     # load_checkpoint requires an optimizer arg; inference discards it.
     dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)
     load_checkpoint(checkpoint_path, model, dummy_optimizer)

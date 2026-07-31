@@ -6,7 +6,7 @@ from llmtrain.model.cache import KVCache
 from llmtrain.model.transformer import (
     MLP,
     CausalSelfAttention,
-    MinimalTransformerLM,
+    TransformerLM,
     _rotary_cos_sin,
     apply_rotary,
 )
@@ -18,14 +18,14 @@ def _tiny_config() -> ModelConfig:
 
 
 def test_forward_produces_correct_output_shape():
-    model = MinimalTransformerLM(_tiny_config())
+    model = TransformerLM(_tiny_config())
     input_ids = torch.randint(0, 16, (3, 6))
     logits = model(input_ids)
     assert logits.shape == (3, 6, 16)
 
 
 def test_backward_populates_gradients_for_every_parameter():
-    model = MinimalTransformerLM(_tiny_config())
+    model = TransformerLM(_tiny_config())
     input_ids = torch.randint(0, 16, (2, 6))
     logits = model(input_ids)
     logits.sum().backward()
@@ -34,19 +34,19 @@ def test_backward_populates_gradients_for_every_parameter():
 
 
 def test_uses_rmsnorm_not_layernorm():
-    model = MinimalTransformerLM(_tiny_config())
+    model = TransformerLM(_tiny_config())
     assert isinstance(model.blocks[0].ln1, nn.RMSNorm)
     assert isinstance(model.blocks[0].ln2, nn.RMSNorm)
     assert isinstance(model.ln_f, nn.RMSNorm)
 
 
 def test_head_weight_is_tied_to_token_embedding():
-    model = MinimalTransformerLM(_tiny_config())
+    model = TransformerLM(_tiny_config())
     assert model.head.weight is model.token_emb.weight
 
 
 def test_tied_weight_receives_gradient():
-    model = MinimalTransformerLM(_tiny_config())
+    model = TransformerLM(_tiny_config())
     input_ids = torch.randint(0, 16, (2, 6))
     logits = model(input_ids)
     logits.sum().backward()
@@ -72,7 +72,7 @@ def test_mlp_uses_swiglu_hidden_dim_formula():
 
 def test_model_output_depends_on_token_order():
     torch.manual_seed(0)
-    model = MinimalTransformerLM(_tiny_config()).eval()
+    model = TransformerLM(_tiny_config()).eval()
     with torch.no_grad():
         a = model(torch.tensor([[3, 7]]))[:, -1]
         b = model(torch.tensor([[7, 3]]))[:, -1]
@@ -98,7 +98,7 @@ def test_forward_handles_seq_len_larger_than_max_seq_len_used_at_construction():
     config = ModelConfig(
         vocab_size=16, d_model=8, n_layers=1, n_heads=2, max_seq_len=6, dropout=0.0
     )
-    model = MinimalTransformerLM(config)
+    model = TransformerLM(config)
     input_ids = torch.randint(0, 16, (2, 50))
     logits = model(input_ids)
     assert logits.shape == (2, 50, 16)
@@ -117,7 +117,7 @@ def test_forward_works_with_grouped_query_attention():
     config = ModelConfig(
         vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
     )
-    model = MinimalTransformerLM(config)
+    model = TransformerLM(config)
     input_ids = torch.randint(0, 16, (2, 6))
     logits = model(input_ids)
     assert logits.shape == (2, 6, 16)
@@ -137,7 +137,7 @@ def test_cached_decoding_matches_uncached_forward():
     config = ModelConfig(
         vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
     )
-    model = MinimalTransformerLM(config)
+    model = TransformerLM(config)
     model.eval()
     input_ids = torch.randint(0, 16, (1, 5))
 
@@ -159,7 +159,7 @@ def test_multi_token_query_against_nonempty_cache_raises():
     config = ModelConfig(
         vocab_size=16, d_model=8, n_layers=1, n_heads=2, n_kv_heads=1, max_seq_len=6, dropout=0.0
     )
-    model = MinimalTransformerLM(config)
+    model = TransformerLM(config)
     model.eval()
     cache = KVCache()
     with torch.no_grad():
@@ -173,7 +173,7 @@ def test_multi_token_prefill_with_cache_matches_uncached():
     config = ModelConfig(
         vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
     )
-    model = MinimalTransformerLM(config)
+    model = TransformerLM(config)
     model.eval()
     input_ids = torch.randint(0, 16, (1, 5))
 

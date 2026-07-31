@@ -12,7 +12,7 @@ def save_checkpoint(
     step: int,
     dataset_state: dict | None = None,
 ) -> None:
-    # MinimalTransformerLM stores its ModelConfig as `self.config`; not every nn.Module
+    # TransformerLM stores its ModelConfig as `self.config`; not every nn.Module
     # passed here has one (e.g. plain nn.Linear in tests), so this is best-effort.
     model_config = getattr(model, "config", None)
     torch.save(

@@ -125,7 +125,7 @@ class Block(nn.Module):
         return x
 
 
-class MinimalTransformerLM(nn.Module):
+class TransformerLM(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.config = config

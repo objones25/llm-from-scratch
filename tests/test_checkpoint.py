@@ -4,7 +4,7 @@ import torch
 from datasets import Dataset
 from torch import nn
 
-from llmtrain.model.transformer import MinimalTransformerLM
+from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
 from llmtrain.training.config import ModelConfig
 
@@ -41,13 +41,13 @@ def test_checkpoint_round_trip_preserves_model_config(tmp_path):
         dropout=0.0,
         rope_theta=5000.0,
     )
-    model = MinimalTransformerLM(config)
+    model = TransformerLM(config)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
 
     checkpoint_path = tmp_path / "checkpoint.pt"
     save_checkpoint(checkpoint_path, model, optimizer, step=1)
 
-    new_model = MinimalTransformerLM(config)
+    new_model = TransformerLM(config)
     new_optimizer = torch.optim.SGD(new_model.parameters(), lr=0.1)
     _, _, loaded_model_config = load_checkpoint(checkpoint_path, new_model, new_optimizer)
 
