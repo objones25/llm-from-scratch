@@ -104,33 +104,41 @@ def train(
     autocast_dtype = torch.bfloat16 if device.type == "cuda" else None
 
     model.train()
-    for batch in dataloader:
-        input_ids = batch.to(device, non_blocking=True)
-        with torch.autocast(
-            device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp
-        ):
-            logits = model(input_ids)
-            loss = next_token_loss(logits, input_ids, pad_id)
+    # A bare `for batch in dataloader` would stop as soon as the underlying stream is
+    # exhausted, capping training at whatever step count one pass through the dataset
+    # happens to reach — silently ignoring the rest of --max-steps. Wrapping in this
+    # while re-iterates the dataset (a fresh epoch) whenever that happens. No-op for
+    # datasets large enough to never exhaust within a normal run (reformer_enwik8,
+    # fineweb_edu); this is what lets small datasets like tiny_shakespeare train for
+    # more than one epoch.
+    while step < train_cfg.max_steps:
+        for batch in dataloader:
+            input_ids = batch.to(device, non_blocking=True)
+            with torch.autocast(
+                device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp
+            ):
+                logits = model(input_ids)
+                loss = next_token_loss(logits, input_ids, pad_id)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        wandb.log({"loss": loss.item()}, step=step)
-        logger.debug("step %d complete", step, extra={"step": step})
+            wandb.log({"loss": loss.item()}, step=step)
+            logger.debug("step %d complete", step, extra={"step": step})
 
-        step += 1
-        if step % train_cfg.checkpoint_interval == 0:
-            save_checkpoint(
-                checkpoint_dir / f"step_{step}.pt",
-                model,
-                optimizer,
-                step=step,
-                dataset_state=dataset.state_dict(),
-            )
-            logger.info("saved checkpoint at step %d", step, extra={"step": step})
-        if step >= train_cfg.max_steps:
-            break
+            step += 1
+            if step % train_cfg.checkpoint_interval == 0:
+                save_checkpoint(
+                    checkpoint_dir / f"step_{step}.pt",
+                    model,
+                    optimizer,
+                    step=step,
+                    dataset_state=dataset.state_dict(),
+                )
+                logger.info("saved checkpoint at step %d", step, extra={"step": step})
+            if step >= train_cfg.max_steps:
+                break
 
     wandb.finish()
     logger.info("training complete after %d steps", step, extra={"step": step})
