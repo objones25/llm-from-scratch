@@ -5,10 +5,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-import wandb
+from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
+import wandb
 from llmtrain.data.streaming import load_streaming_dataset
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
@@ -33,7 +34,7 @@ def next_token_loss(logits: torch.Tensor, input_ids: torch.Tensor, pad_id: int) 
     )
 
 
-def make_collate_fn(tokenizer, max_seq_len: int) -> Callable[[list[dict]], torch.Tensor]:
+def make_collate_fn(tokenizer: Tokenizer, max_seq_len: int) -> Callable[[list[dict]], torch.Tensor]:
     def collate(examples: list[dict]) -> torch.Tensor:
         texts = [example["text"] for example in examples]
         return encode_batch(tokenizer, texts, max_seq_len)
@@ -59,8 +60,10 @@ def train(
     model_cfg.vocab_size = tokenizer.get_vocab_size()
     model_cfg.max_seq_len = data_cfg.max_seq_len
 
-    model = MinimalTransformerLM(model_cfg).to(device)
+    model: torch.nn.Module = MinimalTransformerLM(model_cfg).to(device)
     if device.type == "cuda" and train_cfg.compile:
+        # torch.compile's stub returns a broad callable type; the object is
+        # still an nn.Module at runtime, hence the explicit annotation above.
         model = torch.compile(model)  # type: ignore[assignment]
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr)
 
@@ -72,7 +75,7 @@ def train(
         logger.info("resumed from checkpoint at step %d", step, extra={"step": step})
 
     dataloader = DataLoader(
-        dataset,
+        dataset,  # type: ignore[arg-type]  # IterableDataset isn't in DataLoader's stub overloads, but is supported at runtime
         batch_size=train_cfg.batch_size,
         pin_memory=True,
         collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len),
@@ -94,7 +97,9 @@ def train(
     model.train()
     for batch in dataloader:
         input_ids = batch.to(device, non_blocking=True)
-        with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp):
+        with torch.autocast(
+            device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp
+        ):
             logits = model(input_ids)
             loss = next_token_loss(logits, input_ids, pad_id)
 

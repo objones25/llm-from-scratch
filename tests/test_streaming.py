@@ -4,9 +4,9 @@ from llmtrain.data.streaming import DATASET_REGISTRY, load_streaming_dataset
 
 
 def _fake_load_dataset(path, name, split, streaming):
-    return Dataset.from_dict(
-        {"Text": [f"example {i}" for i in range(20)]}
-    ).to_iterable_dataset(num_shards=4)
+    return Dataset.from_dict({"Text": [f"example {i}" for i in range(20)]}).to_iterable_dataset(
+        num_shards=4
+    )
 
 
 def test_fineweb_edu_registry_entry_uses_sample_100bt_config():

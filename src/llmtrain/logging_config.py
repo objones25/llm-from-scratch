@@ -6,10 +6,29 @@ from pathlib import Path
 from typing import Any, override
 
 LOG_RECORD_BUILTIN_ATTRS = {
-    "args", "asctime", "created", "exc_info", "exc_text", "filename",
-    "funcName", "levelname", "levelno", "lineno", "module", "msecs",
-    "message", "msg", "name", "pathname", "process", "processName",
-    "relativeCreated", "stack_info", "taskName", "thread", "threadName",
+    "args",
+    "asctime",
+    "created",
+    "exc_info",
+    "exc_text",
+    "filename",
+    "funcName",
+    "levelname",
+    "levelno",
+    "lineno",
+    "module",
+    "msecs",
+    "message",
+    "msg",
+    "name",
+    "pathname",
+    "process",
+    "processName",
+    "relativeCreated",
+    "stack_info",
+    "taskName",
+    "thread",
+    "threadName",
 }
 
 
@@ -43,28 +62,30 @@ class JSONFormatter(logging.Formatter):
 
 
 def configure_logging(log_file: str | Path = "app.log") -> None:
-    logging.config.dictConfig({
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "simple": {"format": "%(levelname)-8s %(name)s: %(message)s"},
-            "json": {"()": JSONFormatter},
-        },
-        "handlers": {
-            "stdout": {
-                "class": "logging.StreamHandler",
-                "level": "INFO",
-                "formatter": "simple",
-                "stream": "ext://sys.stdout",
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "simple": {"format": "%(levelname)-8s %(name)s: %(message)s"},
+                "json": {"()": JSONFormatter},
             },
-            "file": {
-                "class": "logging.handlers.RotatingFileHandler",
-                "level": "DEBUG",
-                "formatter": "json",
-                "filename": str(log_file),
-                "maxBytes": 10_000_000,
-                "backupCount": 3,
+            "handlers": {
+                "stdout": {
+                    "class": "logging.StreamHandler",
+                    "level": "INFO",
+                    "formatter": "simple",
+                    "stream": "ext://sys.stdout",
+                },
+                "file": {
+                    "class": "logging.handlers.RotatingFileHandler",
+                    "level": "DEBUG",
+                    "formatter": "json",
+                    "filename": str(log_file),
+                    "maxBytes": 10_000_000,
+                    "backupCount": 3,
+                },
             },
-        },
-        "root": {"level": "DEBUG", "handlers": ["stdout", "file"]},
-    })
+            "root": {"level": "DEBUG", "handlers": ["stdout", "file"]},
+        }
+    )

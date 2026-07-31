@@ -16,9 +16,7 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
     "tiny_shakespeare": DatasetSpec(
         path="Trelis/tiny-shakespeare", name=None, split="train", text_column="Text"
     ),
-    "reformer_enwik8": DatasetSpec(
-        path="reds0510/enwik8-processed", name=None, split="train"
-    ),
+    "reformer_enwik8": DatasetSpec(path="reds0510/enwik8-processed", name=None, split="train"),
     "fineweb_edu": DatasetSpec(
         path="HuggingFaceFW/fineweb-edu", name="sample-100BT", split="train"
     ),
