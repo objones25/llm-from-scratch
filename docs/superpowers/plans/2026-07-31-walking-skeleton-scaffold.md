@@ -292,10 +292,29 @@ from pathlib import Path
 from typing import Any, override
 
 LOG_RECORD_BUILTIN_ATTRS = {
-    "args", "asctime", "created", "exc_info", "exc_text", "filename",
-    "funcName", "levelname", "levelno", "lineno", "module", "msecs",
-    "message", "msg", "name", "pathname", "process", "processName",
-    "relativeCreated", "stack_info", "taskName", "thread", "threadName",
+    "args",
+    "asctime",
+    "created",
+    "exc_info",
+    "exc_text",
+    "filename",
+    "funcName",
+    "levelname",
+    "levelno",
+    "lineno",
+    "module",
+    "msecs",
+    "message",
+    "msg",
+    "name",
+    "pathname",
+    "process",
+    "processName",
+    "relativeCreated",
+    "stack_info",
+    "taskName",
+    "thread",
+    "threadName",
 }
 
 
@@ -308,9 +327,7 @@ class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         always_fields: dict[str, Any] = {
             "message": record.getMessage(),
-            "timestamp": dt.datetime.fromtimestamp(
-                record.created, tz=dt.timezone.utc
-            ).isoformat(),
+            "timestamp": dt.datetime.fromtimestamp(record.created, tz=dt.timezone.utc).isoformat(),
         }
         if record.exc_info is not None:
             always_fields["exc_info"] = self.formatException(record.exc_info)
@@ -331,31 +348,33 @@ class JSONFormatter(logging.Formatter):
 
 
 def configure_logging(log_file: str | Path = "app.log") -> None:
-    logging.config.dictConfig({
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "simple": {"format": "%(levelname)-8s %(name)s: %(message)s"},
-            "json": {"()": JSONFormatter},
-        },
-        "handlers": {
-            "stdout": {
-                "class": "logging.StreamHandler",
-                "level": "INFO",
-                "formatter": "simple",
-                "stream": "ext://sys.stdout",
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "simple": {"format": "%(levelname)-8s %(name)s: %(message)s"},
+                "json": {"()": JSONFormatter},
             },
-            "file": {
-                "class": "logging.handlers.RotatingFileHandler",
-                "level": "DEBUG",
-                "formatter": "json",
-                "filename": str(log_file),
-                "maxBytes": 10_000_000,
-                "backupCount": 3,
+            "handlers": {
+                "stdout": {
+                    "class": "logging.StreamHandler",
+                    "level": "INFO",
+                    "formatter": "simple",
+                    "stream": "ext://sys.stdout",
+                },
+                "file": {
+                    "class": "logging.handlers.RotatingFileHandler",
+                    "level": "DEBUG",
+                    "formatter": "json",
+                    "filename": str(log_file),
+                    "maxBytes": 10_000_000,
+                    "backupCount": 3,
+                },
             },
-        },
-        "root": {"level": "DEBUG", "handlers": ["stdout", "file"]},
-    })
+            "root": {"level": "DEBUG", "handlers": ["stdout", "file"]},
+        }
+    )
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -478,9 +497,9 @@ from llmtrain.data.streaming import DATASET_REGISTRY, load_streaming_dataset
 
 
 def _fake_load_dataset(path, name, split, streaming):
-    return Dataset.from_dict(
-        {"text": [f"example {i}" for i in range(20)]}
-    ).to_iterable_dataset(num_shards=4)
+    return Dataset.from_dict({"text": [f"example {i}" for i in range(20)]}).to_iterable_dataset(
+        num_shards=4
+    )
 
 
 def test_fineweb_edu_registry_entry_uses_sample_100bt_config():

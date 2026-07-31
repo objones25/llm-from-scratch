@@ -303,8 +303,12 @@ from llmtrain.model.transformer import _rotary_cos_sin, apply_rotary
 def test_rope_is_identity_at_position_zero():
     head_dim = 4
     cos, sin = _rotary_cos_sin(
-        seq_len=1, head_dim=head_dim, theta=10000.0, position_offset=0,
-        device=torch.device("cpu"), dtype=torch.float32,
+        seq_len=1,
+        head_dim=head_dim,
+        theta=10000.0,
+        position_offset=0,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
     )
     x = torch.randn(1, 1, 1, head_dim)
     rotated = apply_rotary(x, cos, sin)
@@ -312,7 +316,9 @@ def test_rope_is_identity_at_position_zero():
 
 
 def test_forward_handles_seq_len_larger_than_max_seq_len_used_at_construction():
-    config = ModelConfig(vocab_size=16, d_model=8, n_layers=1, n_heads=2, max_seq_len=6, dropout=0.0)
+    config = ModelConfig(
+        vocab_size=16, d_model=8, n_layers=1, n_heads=2, max_seq_len=6, dropout=0.0
+    )
     model = MinimalTransformerLM(config)
     input_ids = torch.randint(0, 16, (2, 50))
     logits = model(input_ids)
@@ -523,7 +529,12 @@ class CausalSelfAttention(nn.Module):
         q = apply_rotary(q, cos, sin)
         k = apply_rotary(k, cos, sin)
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0, enable_gqa=True
+            q,
+            k,
+            v,
+            is_causal=True,
+            dropout_p=self.dropout if self.training else 0.0,
+            enable_gqa=True,
         )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
         return self.out_proj(attn_output)
@@ -737,16 +748,18 @@ from llmtrain.model.cache import KVCache
 Update `Block.forward`:
 
 ```python
-    def forward(
-        self,
-        x: torch.Tensor,
-        position_offset: int = 0,
-        cache: KVCache | None = None,
-        layer_idx: int = 0,
-    ) -> torch.Tensor:
-        x = x + self.attn(self.ln1(x), position_offset=position_offset, cache=cache, layer_idx=layer_idx)
-        x = x + self.mlp(self.ln2(x))
-        return x
+def forward(
+    self,
+    x: torch.Tensor,
+    position_offset: int = 0,
+    cache: KVCache | None = None,
+    layer_idx: int = 0,
+) -> torch.Tensor:
+    x = x + self.attn(
+        self.ln1(x), position_offset=position_offset, cache=cache, layer_idx=layer_idx
+    )
+    x = x + self.mlp(self.ln2(x))
+    return x
 ```
 
 Update `MinimalTransformerLM.forward`:
@@ -800,9 +813,7 @@ from llmtrain.training.config import ModelConfig
 
 
 def _tiny_setup() -> tuple[MinimalTransformerLM, Tokenizer]:
-    tokenizer = train_tokenizer(
-        ["hello world", "hello there", "world hello there"], vocab_size=32
-    )
+    tokenizer = train_tokenizer(["hello world", "hello there", "world hello there"], vocab_size=32)
     config = ModelConfig(
         vocab_size=tokenizer.get_vocab_size(),
         d_model=8,
@@ -999,7 +1010,9 @@ def main() -> None:
 
     checkpoint_path = Path(args.checkpoint)
     tokenizer_path = (
-        Path(args.tokenizer_path) if args.tokenizer_path else checkpoint_path.parent / "tokenizer.json"
+        Path(args.tokenizer_path)
+        if args.tokenizer_path
+        else checkpoint_path.parent / "tokenizer.json"
     )
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
