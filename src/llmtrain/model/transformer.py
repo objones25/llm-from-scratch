@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from llmtrain.model.cache import KVCache
 from llmtrain.training.config import ModelConfig
 
 
@@ -51,7 +52,13 @@ class CausalSelfAttention(nn.Module):
         self.out_proj = nn.Linear(config.d_model, config.d_model)
         self.dropout = config.dropout
 
-    def forward(self, x: torch.Tensor, position_offset: int = 0) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        position_offset: int = 0,
+        cache: KVCache | None = None,
+        layer_idx: int = 0,
+    ) -> torch.Tensor:
         batch_size, seq_len, d_model = x.shape
         q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         kv = self.kv_proj(x)
@@ -63,8 +70,12 @@ class CausalSelfAttention(nn.Module):
         )
         q = apply_rotary(q, cos, sin)
         k = apply_rotary(k, cos, sin)
+        if cache is not None:
+            k, v = cache.update(layer_idx, k, v)
+        # When using cache, we're attending to a pre-computed KV context, so don't apply
+        # causal masking (the cache already contains only previous positions)
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0, enable_gqa=True
+            q, k, v, is_causal=(cache is None), dropout_p=self.dropout if self.training else 0.0, enable_gqa=True
         )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
         return self.out_proj(attn_output)
@@ -91,8 +102,14 @@ class Block(nn.Module):
         self.ln2 = nn.RMSNorm(config.d_model)
         self.mlp = MLP(config)
 
-    def forward(self, x: torch.Tensor, position_offset: int = 0) -> torch.Tensor:
-        x = x + self.attn(self.ln1(x), position_offset=position_offset)
+    def forward(
+        self,
+        x: torch.Tensor,
+        position_offset: int = 0,
+        cache: KVCache | None = None,
+        layer_idx: int = 0,
+    ) -> torch.Tensor:
+        x = x + self.attn(self.ln1(x), position_offset=position_offset, cache=cache, layer_idx=layer_idx)
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -107,9 +124,10 @@ class MinimalTransformerLM(nn.Module):
         self.head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.head.weight = self.token_emb.weight
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, cache: KVCache | None = None) -> torch.Tensor:
         x = self.token_emb(input_ids)
-        for block in self.blocks:
-            x = block(x)
+        position_offset = cache.seq_len if cache is not None else 0
+        for layer_idx, block in enumerate(self.blocks):
+            x = block(x, position_offset=position_offset, cache=cache, layer_idx=layer_idx)
         x = self.ln_f(x)
         return self.head(x)

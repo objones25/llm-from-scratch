@@ -2,6 +2,7 @@ import pytest
 import torch
 from torch import nn
 
+from llmtrain.model.cache import KVCache
 from llmtrain.model.transformer import (
     MLP,
     CausalSelfAttention,
@@ -114,3 +115,26 @@ def test_n_heads_must_be_divisible_by_n_kv_heads():
     )
     with pytest.raises(ValueError):
         CausalSelfAttention(config)
+
+
+def test_cached_decoding_matches_uncached_forward():
+    torch.manual_seed(0)
+    config = ModelConfig(
+        vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
+    )
+    model = MinimalTransformerLM(config)
+    model.eval()
+    input_ids = torch.randint(0, 16, (1, 5))
+
+    with torch.no_grad():
+        full_logits = model(input_ids)
+
+    cache = KVCache()
+    cached_logits = []
+    with torch.no_grad():
+        for t in range(input_ids.shape[1]):
+            step_logits = model(input_ids[:, t : t + 1], cache=cache)
+            cached_logits.append(step_logits)
+    cached_logits = torch.cat(cached_logits, dim=1)
+
+    assert torch.allclose(full_logits, cached_logits, atol=1e-5)
