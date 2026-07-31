@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from llmtrain.model.transformer import MinimalTransformerLM
+from llmtrain.model.transformer import MLP, MinimalTransformerLM
 from llmtrain.training.config import ModelConfig
 
 
@@ -43,3 +43,20 @@ def test_tied_weight_receives_gradient():
     logits = model(input_ids)
     logits.sum().backward()
     assert model.token_emb.weight.grad is not None
+
+
+def test_mlp_output_shape_matches_input():
+    config = _tiny_config()
+    mlp = MLP(config)
+    x = torch.randn(3, 6, config.d_model)
+    out = mlp(x)
+    assert out.shape == x.shape
+
+
+def test_mlp_uses_swiglu_hidden_dim_formula():
+    config = _tiny_config()
+    mlp = MLP(config)
+    expected_d_ff = int(2 / 3 * 4 * config.d_model)
+    assert mlp.w_gate.out_features == expected_d_ff
+    assert mlp.w_up.out_features == expected_d_ff
+    assert mlp.w_down.in_features == expected_d_ff

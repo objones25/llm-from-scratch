@@ -33,15 +33,14 @@ class CausalSelfAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(config.d_model, 4 * config.d_model),
-            nn.GELU(),
-            nn.Linear(4 * config.d_model, config.d_model),
-            nn.Dropout(config.dropout),
-        )
+        d_ff = int(2 / 3 * 4 * config.d_model)
+        self.w_gate = nn.Linear(config.d_model, d_ff)
+        self.w_up = nn.Linear(config.d_model, d_ff)
+        self.w_down = nn.Linear(d_ff, config.d_model)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        return self.dropout(self.w_down(F.silu(self.w_gate(x)) * self.w_up(x)))
 
 
 class Block(nn.Module):
