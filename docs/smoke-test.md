@@ -49,7 +49,7 @@ uv run --env-file .env python -m llmtrain.training.train \
     --dataset tiny_shakespeare --max-steps 50 --batch-size 4
 ```
 
-This streams `karpathy/tiny_shakespeare`, trains a tiny BPE tokenizer on a
+This streams `Trelis/tiny-shakespeare`, trains a tiny BPE tokenizer on a
 sample of it, builds the minimal transformer, and runs 50 training steps
 on CPU/MPS, logging to W&B and to `app.log` (JSONL).
 

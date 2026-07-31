@@ -12,8 +12,8 @@ A Hugging Face token is required for dataset/model access. Never commit it or wr
 
 | Dataset | Purpose |
 |---|---|
-| `karpathy/tiny_shakespeare` | Local smoke test (Mac/MPS) — fast, no GPU rental, validates the training loop end-to-end before spending money on a GPU. |
-| `google/reformer-enwik8` | 15-minute A100 smoke test — validates loss/throughput numbers on real GPU hardware before committing to a full run. |
+| `Trelis/tiny-shakespeare` | Local smoke test (Mac/MPS) — fast, no GPU rental, validates the training loop end-to-end before spending money on a GPU. |
+| `reds0510/enwik8-processed` | 15-minute A100 smoke test — validates loss/throughput numbers on real GPU hardware before committing to a full run. |
 | `HuggingFaceFW/fineweb-edu` | Main pretraining corpus. Use `name="sample-100BT"`, `split="train"`, `streaming=True` — never download the full dataset. |
 | `HuggingFaceTB/smoltalk` | SFT (supervised fine-tuning) after pretraining. |
 | `HuggingFaceH4/no_robots` | Quick sanity checks (small, fast to iterate on). |

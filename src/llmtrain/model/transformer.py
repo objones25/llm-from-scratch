@@ -69,7 +69,7 @@ class MinimalTransformerLM(nn.Module):
         self.head = nn.Linear(config.d_model, config.vocab_size, bias=False)
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len = input_ids.shape
+        _batch_size, seq_len = input_ids.shape
         positions = torch.arange(seq_len, device=input_ids.device)
         x = self.token_emb(input_ids) + self.pos_emb(positions)
         for block in self.blocks:

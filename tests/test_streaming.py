@@ -5,7 +5,7 @@ from llmtrain.data.streaming import DATASET_REGISTRY, load_streaming_dataset
 
 def _fake_load_dataset(path, name, split, streaming):
     return Dataset.from_dict(
-        {"text": [f"example {i}" for i in range(20)]}
+        {"Text": [f"example {i}" for i in range(20)]}
     ).to_iterable_dataset(num_shards=4)
 
 

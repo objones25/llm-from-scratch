@@ -10,10 +10,10 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from llmtrain.data.streaming import load_streaming_dataset
-from llmtrain.data.tokenizer import encode_batch, train_tokenizer
+from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
 from llmtrain.model.transformer import MinimalTransformerLM
-from llmtrain.training.checkpoint import save_checkpoint
+from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
 from llmtrain.training.config import DataConfig, ModelConfig, TrainConfig
 
 logger = logging.getLogger(__name__)
@@ -23,12 +23,13 @@ def select_device() -> torch.device:
     return torch.accelerator.current_accelerator(check_available=True) or torch.device("cpu")
 
 
-def next_token_loss(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+def next_token_loss(logits: torch.Tensor, input_ids: torch.Tensor, pad_id: int) -> torch.Tensor:
     shift_logits = logits[:, :-1, :]
     shift_targets = input_ids[:, 1:]
     return F.cross_entropy(
         shift_logits.reshape(-1, shift_logits.size(-1)),
         shift_targets.reshape(-1),
+        ignore_index=pad_id,
     )
 
 
@@ -40,7 +41,12 @@ def make_collate_fn(tokenizer, max_seq_len: int) -> Callable[[list[dict]], torch
     return collate
 
 
-def train(data_cfg: DataConfig, model_cfg: ModelConfig, train_cfg: TrainConfig) -> None:
+def train(
+    data_cfg: DataConfig,
+    model_cfg: ModelConfig,
+    train_cfg: TrainConfig,
+    resume_path: str | None = None,
+) -> None:
     configure_logging(log_file=train_cfg.log_file)
     device = select_device()
     logger.info("training on device %s", device.type, extra={"device": device.type})
@@ -51,11 +57,19 @@ def train(data_cfg: DataConfig, model_cfg: ModelConfig, train_cfg: TrainConfig) 
     sample_texts = [example["text"] for example in dataset.take(200)]
     tokenizer = train_tokenizer(sample_texts, vocab_size=data_cfg.tokenizer_vocab_size)
     model_cfg.vocab_size = tokenizer.get_vocab_size()
+    model_cfg.max_seq_len = data_cfg.max_seq_len
 
     model = MinimalTransformerLM(model_cfg).to(device)
     if device.type == "cuda" and train_cfg.compile:
         model = torch.compile(model)  # type: ignore[assignment]
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr)
+
+    step = 0
+    if resume_path is not None:
+        step, dataset_state = load_checkpoint(resume_path, model, optimizer)
+        if dataset_state is not None:
+            dataset.load_state_dict(dataset_state)
+        logger.info("resumed from checkpoint at step %d", step, extra={"step": step})
 
     dataloader = DataLoader(
         dataset,
@@ -73,13 +87,16 @@ def train(data_cfg: DataConfig, model_cfg: ModelConfig, train_cfg: TrainConfig) 
     checkpoint_dir = Path(train_cfg.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    step = 0
+    pad_id = tokenizer.token_to_id(PAD_TOKEN)
+    assert pad_id is not None
+    autocast_dtype = torch.bfloat16 if device.type == "cuda" else None
+
     model.train()
     for batch in dataloader:
         input_ids = batch.to(device, non_blocking=True)
-        with torch.autocast(device_type=device.type, enabled=train_cfg.use_amp):
-            logits = model(input_ids[:, :-1])
-            loss = next_token_loss(logits, input_ids)
+        with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp):
+            logits = model(input_ids)
+            loss = next_token_loss(logits, input_ids, pad_id)
 
         optimizer.zero_grad()
         loss.backward()
@@ -115,12 +132,19 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
+    parser.add_argument("--resume", type=str, default=None)
     args = parser.parse_args()
 
     data_cfg = DataConfig(dataset_name=args.dataset)
     model_cfg = ModelConfig()
-    train_cfg = TrainConfig(max_steps=args.max_steps, batch_size=args.batch_size, lr=args.lr)
-    train(data_cfg, model_cfg, train_cfg)
+    train_cfg = TrainConfig(
+        max_steps=args.max_steps,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        checkpoint_dir=args.checkpoint_dir,
+    )
+    train(data_cfg, model_cfg, train_cfg, resume_path=args.resume)
 
 
 if __name__ == "__main__":

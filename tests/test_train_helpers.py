@@ -15,7 +15,7 @@ def test_next_token_loss_is_near_zero_for_perfect_predictions():
     logits = torch.full((1, 4, vocab_size), -100.0)
     for position, target_id in enumerate(input_ids[0, 1:]):
         logits[0, position, target_id] = 100.0
-    loss = next_token_loss(logits, input_ids)
+    loss = next_token_loss(logits, input_ids, pad_id=99)
     assert loss.item() < 0.01
 
 
