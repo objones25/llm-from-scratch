@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from llmtrain.model.transformer import MLP, MinimalTransformerLM
+from llmtrain.model.transformer import MLP, MinimalTransformerLM, _rotary_cos_sin, apply_rotary
 from llmtrain.training.config import ModelConfig
 
 
@@ -60,3 +60,22 @@ def test_mlp_uses_swiglu_hidden_dim_formula():
     assert mlp.w_gate.out_features == expected_d_ff
     assert mlp.w_up.out_features == expected_d_ff
     assert mlp.w_down.in_features == expected_d_ff
+
+
+def test_rope_is_identity_at_position_zero():
+    head_dim = 4
+    cos, sin = _rotary_cos_sin(
+        seq_len=1, head_dim=head_dim, theta=10000.0, position_offset=0,
+        device=torch.device("cpu"), dtype=torch.float32,
+    )
+    x = torch.randn(1, 1, 1, head_dim)
+    rotated = apply_rotary(x, cos, sin)
+    assert torch.allclose(rotated, x, atol=1e-6)
+
+
+def test_forward_handles_seq_len_larger_than_max_seq_len_used_at_construction():
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=1, n_heads=2, max_seq_len=6, dropout=0.0)
+    model = MinimalTransformerLM(config)
+    input_ids = torch.randint(0, 16, (2, 50))
+    logits = model(input_ids)
+    assert logits.shape == (2, 50, 16)

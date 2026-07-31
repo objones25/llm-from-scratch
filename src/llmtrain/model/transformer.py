@@ -5,6 +5,34 @@ from torch.nn import functional as F
 from llmtrain.training.config import ModelConfig
 
 
+def _rotary_cos_sin(
+    seq_len: int,
+    head_dim: int,
+    theta: float,
+    position_offset: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    inv_freq = 1.0 / (
+        theta ** (torch.arange(0, head_dim, 2, device=device, dtype=torch.float32) / head_dim)
+    )
+    positions = torch.arange(
+        position_offset, position_offset + seq_len, device=device, dtype=torch.float32
+    )
+    freqs = torch.outer(positions, inv_freq)
+    emb = torch.cat([freqs, freqs], dim=-1)
+    return emb.cos().to(dtype), emb.sin().to(dtype)
+
+
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat([-x2, x1], dim=-1)
+
+
+def apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    return x * cos + _rotate_half(x) * sin
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -12,17 +40,25 @@ class CausalSelfAttention(nn.Module):
             raise ValueError("d_model must be divisible by n_heads")
         self.n_heads = config.n_heads
         self.head_dim = config.d_model // config.n_heads
+        if self.head_dim % 2 != 0:
+            raise ValueError("head_dim must be even for rotary position embeddings")
+        self.rope_theta = config.rope_theta
         self.qkv_proj = nn.Linear(config.d_model, 3 * config.d_model)
         self.out_proj = nn.Linear(config.d_model, config.d_model)
         self.dropout = config.dropout
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, position_offset: int = 0) -> torch.Tensor:
         batch_size, seq_len, d_model = x.shape
         qkv = self.qkv_proj(x)
         q, k, v = qkv.split(d_model, dim=2)
         q = q.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         k = k.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         v = v.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        cos, sin = _rotary_cos_sin(
+            seq_len, self.head_dim, self.rope_theta, position_offset, x.device, x.dtype
+        )
+        q = apply_rotary(q, cos, sin)
+        k = apply_rotary(k, cos, sin)
         attn_output = F.scaled_dot_product_attention(
             q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
         )
@@ -51,8 +87,8 @@ class Block(nn.Module):
         self.ln2 = nn.RMSNorm(config.d_model)
         self.mlp = MLP(config)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln1(x))
+    def forward(self, x: torch.Tensor, position_offset: int = 0) -> torch.Tensor:
+        x = x + self.attn(self.ln1(x), position_offset=position_offset)
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -62,16 +98,13 @@ class MinimalTransformerLM(nn.Module):
         super().__init__()
         self.config = config
         self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
-        self.pos_emb = nn.Embedding(config.max_seq_len, config.d_model)
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
         self.ln_f = nn.RMSNorm(config.d_model)
         self.head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.head.weight = self.token_emb.weight
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        _batch_size, seq_len = input_ids.shape
-        positions = torch.arange(seq_len, device=input_ids.device)
-        x = self.token_emb(input_ids) + self.pos_emb(positions)
+        x = self.token_emb(input_ids)
         for block in self.blocks:
             x = block(x)
         x = self.ln_f(x)
