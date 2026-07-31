@@ -15,6 +15,12 @@ def test_model_config_is_overridable():
     assert cfg.n_layers == 4
 
 
+def test_model_config_has_rope_and_gqa_defaults():
+    cfg = ModelConfig()
+    assert cfg.rope_theta == 10000.0
+    assert cfg.n_kv_heads == 1
+
+
 def test_train_config_has_sensible_defaults():
     cfg = TrainConfig()
     assert cfg.max_steps > 0

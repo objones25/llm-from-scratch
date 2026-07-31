@@ -15,8 +15,10 @@ class ModelConfig:
     d_model: int = 128
     n_layers: int = 2
     n_heads: int = 4
+    n_kv_heads: int = 1
     max_seq_len: int = 128
     dropout: float = 0.0
+    rope_theta: float = 10000.0
 
 
 @dataclass
