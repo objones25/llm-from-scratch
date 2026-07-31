@@ -70,11 +70,24 @@ def test_mlp_uses_swiglu_hidden_dim_formula():
     assert mlp.w_down.in_features == expected_d_ff
 
 
+def test_model_output_depends_on_token_order():
+    torch.manual_seed(0)
+    model = MinimalTransformerLM(_tiny_config()).eval()
+    with torch.no_grad():
+        a = model(torch.tensor([[3, 7]]))[:, -1]
+        b = model(torch.tensor([[7, 3]]))[:, -1]
+    assert not torch.allclose(a, b, atol=1e-5)
+
+
 def test_rope_is_identity_at_position_zero():
     head_dim = 4
     cos, sin = _rotary_cos_sin(
-        seq_len=1, head_dim=head_dim, theta=10000.0, position_offset=0,
-        device=torch.device("cpu"), dtype=torch.float32,
+        seq_len=1,
+        head_dim=head_dim,
+        theta=10000.0,
+        position_offset=0,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
     )
     x = torch.randn(1, 1, 1, head_dim)
     rotated = apply_rotary(x, cos, sin)
@@ -82,7 +95,9 @@ def test_rope_is_identity_at_position_zero():
 
 
 def test_forward_handles_seq_len_larger_than_max_seq_len_used_at_construction():
-    config = ModelConfig(vocab_size=16, d_model=8, n_layers=1, n_heads=2, max_seq_len=6, dropout=0.0)
+    config = ModelConfig(
+        vocab_size=16, d_model=8, n_layers=1, n_heads=2, max_seq_len=6, dropout=0.0
+    )
     model = MinimalTransformerLM(config)
     input_ids = torch.randint(0, 16, (2, 50))
     logits = model(input_ids)
@@ -138,6 +153,19 @@ def test_cached_decoding_matches_uncached_forward():
     cached_logits = torch.cat(cached_logits, dim=1)
 
     assert torch.allclose(full_logits, cached_logits, atol=1e-5)
+
+
+def test_multi_token_query_against_nonempty_cache_raises():
+    config = ModelConfig(
+        vocab_size=16, d_model=8, n_layers=1, n_heads=2, n_kv_heads=1, max_seq_len=6, dropout=0.0
+    )
+    model = MinimalTransformerLM(config)
+    model.eval()
+    cache = KVCache()
+    with torch.no_grad():
+        model(torch.tensor([[1]]), cache=cache)
+        with pytest.raises(ValueError):
+            model(torch.tensor([[2, 3]]), cache=cache)
 
 
 def test_multi_token_prefill_with_cache_matches_uncached():
