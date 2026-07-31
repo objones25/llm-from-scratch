@@ -86,9 +86,7 @@ def train(data_cfg: DataConfig, model_cfg: ModelConfig, train_cfg: TrainConfig) 
         optimizer.step()
 
         wandb.log({"loss": loss.item()}, step=step)
-        logger.debug(
-            "step %d loss %.4f", step, loss.item(), extra={"step": step, "loss": loss.item()}
-        )
+        logger.debug("step %d complete", step, extra={"step": step})
 
         step += 1
         if step % train_cfg.checkpoint_interval == 0:
