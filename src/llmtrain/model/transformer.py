@@ -72,10 +72,12 @@ class CausalSelfAttention(nn.Module):
         k = apply_rotary(k, cos, sin)
         if cache is not None:
             k, v = cache.update(layer_idx, k, v)
-        # When using cache, we're attending to a pre-computed KV context, so don't apply
-        # causal masking (the cache already contains only previous positions)
+        # Disable causal masking for single-token queries to avoid a numerically incorrect
+        # interaction between enable_gqa=True and non-square query/key shapes in scaled_dot_product_attention.
+        # For multi-token queries (including prefill into an empty cache), causal masking is safe and necessary.
+        # Single-token decode steps don't need masking anyway (no "future" positions in a cache of past tokens).
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, is_causal=(cache is None), dropout_p=self.dropout if self.training else 0.0, enable_gqa=True
+            q, k, v, is_causal=(seq_len > 1), dropout_p=self.dropout if self.training else 0.0, enable_gqa=True
         )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
         return self.out_proj(attn_output)

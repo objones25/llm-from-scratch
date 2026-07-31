@@ -138,3 +138,25 @@ def test_cached_decoding_matches_uncached_forward():
     cached_logits = torch.cat(cached_logits, dim=1)
 
     assert torch.allclose(full_logits, cached_logits, atol=1e-5)
+
+
+def test_multi_token_prefill_with_cache_matches_uncached():
+    torch.manual_seed(0)
+    config = ModelConfig(
+        vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
+    )
+    model = MinimalTransformerLM(config)
+    model.eval()
+    input_ids = torch.randint(0, 16, (1, 5))
+
+    # Full uncached forward
+    with torch.no_grad():
+        uncached_logits = model(input_ids)
+
+    # Multi-token prefill into an initially-empty cache (simulates Task 9 prefill step)
+    cache = KVCache()
+    with torch.no_grad():
+        prefill_logits = model(input_ids, cache=cache)
+
+    # Prefill output should match uncached forward exactly
+    assert torch.allclose(uncached_logits, prefill_logits, atol=1e-5)
