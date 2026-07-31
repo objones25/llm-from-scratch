@@ -19,9 +19,12 @@ def generate_token_ids(
     max_new_tokens: int,
     temperature: float = 1.0,
 ) -> list[int]:
+    prompt_ids = tokenizer.encode(prompt).ids
+    if max_new_tokens <= 0:
+        return prompt_ids
+
     model.eval()
     device = next(model.parameters()).device
-    prompt_ids = tokenizer.encode(prompt).ids
     input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 
     cache = KVCache()
