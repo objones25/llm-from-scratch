@@ -67,6 +67,7 @@ class MinimalTransformerLM(nn.Module):
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
         self.ln_f = nn.RMSNorm(config.d_model)
         self.head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self.head.weight = self.token_emb.weight
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         _batch_size, seq_len = input_ids.shape

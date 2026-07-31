@@ -30,3 +30,16 @@ def test_uses_rmsnorm_not_layernorm():
     assert isinstance(model.blocks[0].ln1, nn.RMSNorm)
     assert isinstance(model.blocks[0].ln2, nn.RMSNorm)
     assert isinstance(model.ln_f, nn.RMSNorm)
+
+
+def test_head_weight_is_tied_to_token_embedding():
+    model = MinimalTransformerLM(_tiny_config())
+    assert model.head.weight is model.token_emb.weight
+
+
+def test_tied_weight_receives_gradient():
+    model = MinimalTransformerLM(_tiny_config())
+    input_ids = torch.randint(0, 16, (2, 6))
+    logits = model(input_ids)
+    logits.sum().backward()
+    assert model.token_emb.weight.grad is not None
