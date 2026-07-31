@@ -46,12 +46,15 @@ https://wandb.ai/settings#apikeys and fix `.env`, then retry.
 
 ```bash
 uv run --env-file .env python -m llmtrain.training.train \
-    --dataset tiny_shakespeare --max-steps 50 --batch-size 4
+    --dataset tiny_shakespeare --max-steps 50 --batch-size 4 --checkpoint-interval 50
 ```
 
 This streams `Trelis/tiny-shakespeare`, trains a tiny BPE tokenizer on a
-sample of it, builds the minimal transformer, and runs 50 training steps
-on CPU/MPS, logging to W&B and to `app.log` (JSONL).
+sample of it, builds the transformer, and runs 50 training steps on
+CPU/MPS, logging to W&B and to `app.log` (JSONL). `--checkpoint-interval 50`
+overrides `TrainConfig`'s production default of 1000 so this quick run
+actually produces a checkpoint (see step 4) instead of finishing before the
+first checkpoint interval.
 
 ## 5. Check all four success criteria
 

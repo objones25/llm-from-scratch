@@ -155,6 +155,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
+    parser.add_argument("--checkpoint-interval", type=int, default=TrainConfig.checkpoint_interval)
     parser.add_argument("--resume", type=str, default=None)
     args = parser.parse_args()
 
@@ -165,6 +166,7 @@ def main() -> None:
         batch_size=args.batch_size,
         lr=args.lr,
         checkpoint_dir=args.checkpoint_dir,
+        checkpoint_interval=args.checkpoint_interval,
     )
     train(data_cfg, model_cfg, train_cfg, resume_path=args.resume)
 

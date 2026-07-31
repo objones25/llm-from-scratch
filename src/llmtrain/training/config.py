@@ -6,7 +6,7 @@ class DataConfig:
     dataset_name: str = "tiny_shakespeare"
     shuffle_buffer_size: int = 1000
     max_seq_len: int = 128
-    tokenizer_vocab_size: int = 1000
+    tokenizer_vocab_size: int = 8000
 
 
 @dataclass
@@ -33,7 +33,7 @@ class TrainConfig:
     max_steps: int = 100
     seed: int = 42
     checkpoint_dir: str = "checkpoints"
-    checkpoint_interval: int = 50
+    checkpoint_interval: int = 1000
     compile: bool = True
     use_amp: bool = True
     wandb_project: str = "llm-training"
