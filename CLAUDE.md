@@ -27,10 +27,16 @@ A Hugging Face token and a W&B API key are required (`HF_TOKEN`, `WANDB_API_KEY`
 ```
 data/streaming.py    # DATASET_REGISTRY (DatasetSpec incl. text_column rename) + load_streaming_dataset
 data/tokenizer.py     # train_tokenizer / encode_batch, independent of the model
-model/transformer.py  # MinimalTransformerLM: hand-rolled causal attention via F.scaled_dot_product_attention(is_causal=True)
+model/transformer.py  # MinimalTransformerLM: RoPE, RMSNorm, SwiGLU MLP, weight-tied embeddings/head,
+                       # GQA, hand-rolled causal attention via F.scaled_dot_product_attention with
+                       # is_causal=(seq_len > 1) — SDPA's non-square causal bias is top-left-aligned,
+                       # not cached-decode-safe, so masking is skipped for single-token cached decode
+                       # instead — and a KV-cache-aware forward (position_offset/cache/layer_idx threaded through)
+model/cache.py         # KVCache: per-layer (k, v) tensor cache, update() concatenates along seq dim
 training/config.py    # DataConfig/ModelConfig/TrainConfig dataclasses, no YAML layer
-training/train.py      # select_device, next_token_loss, make_collate_fn, train(), main() — the only entry point
-training/checkpoint.py # saves/loads model + optimizer + dataset iterator state as one unit
+training/train.py      # select_device, next_token_loss, make_collate_fn, train(), main() — the training entry point
+training/checkpoint.py # saves/loads model + optimizer + dataset iterator state + model architecture config as one unit
+generate.py             # KV-cache-backed text generation from a checkpoint; main() is a second CLI entry point
 logging_config.py       # dictConfig: stdout + JSONL file handler
 ```
 
@@ -39,6 +45,13 @@ python -m llmtrain.training.train --dataset <tiny_shakespeare|reformer_enwik8|fi
     [--max-steps N] [--batch-size N] [--lr F] [--checkpoint-dir DIR] [--resume PATH]
 ```
 Same code path for local smoke tests, the A100 smoke test, and the real pretraining run — `--checkpoint-dir` is the only thing that needs to change for RunPod (point it at the mounted network volume).
+
+A second CLI entry point, `generate.py`, runs inference from a trained checkpoint (greedy or temperature-sampled decoding, KV-cache-backed):
+```
+python -m llmtrain.generate --checkpoint <path/to/step_N.pt> [--tokenizer-path PATH] \
+    --prompt "..." [--max-new-tokens N] [--temperature F]
+```
+`--tokenizer-path` defaults to `tokenizer.json` next to the checkpoint (saved alongside checkpoints by `train.py`). Model architecture is reconstructed from the `model_config` persisted in the checkpoint (falls back to `ModelConfig()` defaults for older checkpoints saved before that field existed).
 
 ## Device handling (MPS vs CUDA)
 

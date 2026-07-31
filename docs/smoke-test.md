@@ -74,6 +74,21 @@ tokenizer, model, checkpoint, or logging) — not in this runbook. Add or
 adjust a unit test that would have caught it, fix the module, and re-run
 from step 4.
 
+## 5b. Generate text from the checkpoint
+
+Confirms the inference path (`generate.py`, KV-cache decoding) also works
+end-to-end against a checkpoint produced by step 4, using the tokenizer
+saved alongside it:
+
+```bash
+uv run python -m llmtrain.generate --checkpoint checkpoints/step_50.pt \
+    --prompt "Once upon a time" --max-new-tokens 20
+```
+
+Expected: prints generated text to stdout with no traceback. The output
+won't be coherent (tiny model, tiny smoke-test training run) — this step
+only verifies the generation pipeline runs, not output quality.
+
 ## 6. Record the result
 
 Once all four checks pass:
