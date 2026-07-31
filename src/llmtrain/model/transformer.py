@@ -38,29 +38,33 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         if config.d_model % config.n_heads != 0:
             raise ValueError("d_model must be divisible by n_heads")
+        if config.n_heads % config.n_kv_heads != 0:
+            raise ValueError("n_heads must be divisible by n_kv_heads")
         self.n_heads = config.n_heads
+        self.n_kv_heads = config.n_kv_heads
         self.head_dim = config.d_model // config.n_heads
         if self.head_dim % 2 != 0:
             raise ValueError("head_dim must be even for rotary position embeddings")
         self.rope_theta = config.rope_theta
-        self.qkv_proj = nn.Linear(config.d_model, 3 * config.d_model)
+        self.q_proj = nn.Linear(config.d_model, config.n_heads * self.head_dim)
+        self.kv_proj = nn.Linear(config.d_model, 2 * config.n_kv_heads * self.head_dim)
         self.out_proj = nn.Linear(config.d_model, config.d_model)
         self.dropout = config.dropout
 
     def forward(self, x: torch.Tensor, position_offset: int = 0) -> torch.Tensor:
         batch_size, seq_len, d_model = x.shape
-        qkv = self.qkv_proj(x)
-        q, k, v = qkv.split(d_model, dim=2)
-        q = q.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
-        k = k.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
-        v = v.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        kv = self.kv_proj(x)
+        k, v = kv.split(self.n_kv_heads * self.head_dim, dim=2)
+        k = k.view(batch_size, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
         cos, sin = _rotary_cos_sin(
             seq_len, self.head_dim, self.rope_theta, position_offset, x.device, x.dtype
         )
         q = apply_rotary(q, cos, sin)
         k = apply_rotary(k, cos, sin)
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
+            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0, enable_gqa=True
         )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
         return self.out_proj(attn_output)
