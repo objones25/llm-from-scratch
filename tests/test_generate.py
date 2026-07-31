@@ -1,3 +1,4 @@
+import pytest
 import torch
 from tokenizers import Tokenizer
 
@@ -9,9 +10,7 @@ from llmtrain.training.config import ModelConfig
 
 
 def _tiny_setup() -> tuple[MinimalTransformerLM, Tokenizer]:
-    tokenizer = train_tokenizer(
-        ["hello world", "hello there", "world hello there"], vocab_size=32
-    )
+    tokenizer = train_tokenizer(["hello world", "hello there", "world hello there"], vocab_size=32)
     config = ModelConfig(
         vocab_size=tokenizer.get_vocab_size(),
         d_model=8,
@@ -48,6 +47,21 @@ def test_generate_token_ids_with_zero_max_new_tokens():
     output_ids = generate_token_ids(model, tokenizer, "hello", max_new_tokens=0, temperature=0.0)
     assert len(output_ids) == len(prompt_ids)
     assert output_ids == prompt_ids
+
+
+def test_generate_token_ids_raises_on_empty_prompt():
+    torch.manual_seed(0)
+    model, tokenizer = _tiny_setup()
+    with pytest.raises(ValueError):
+        generate_token_ids(model, tokenizer, "", max_new_tokens=5, temperature=0.0)
+
+
+def test_generate_token_ids_restores_callers_training_mode():
+    torch.manual_seed(0)
+    model, tokenizer = _tiny_setup()
+    model.train()
+    generate_token_ids(model, tokenizer, "hello", max_new_tokens=3, temperature=0.0)
+    assert model.training is True
 
 
 def test_generate_works_after_checkpoint_and_tokenizer_round_trip(tmp_path):

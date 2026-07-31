@@ -5,11 +5,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-import wandb
 from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
+import wandb
 from llmtrain.data.streaming import load_streaming_dataset
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
@@ -69,7 +69,10 @@ def train(
 
     step = 0
     if resume_path is not None:
-        step, dataset_state = load_checkpoint(resume_path, model, optimizer)
+        # Training reconstructs the model from the current model_cfg, not the checkpoint's
+        # persisted config — the returned model_config is only used by generate.py, which
+        # rebuilds the model from scratch at inference time.
+        step, dataset_state, _resumed_model_config = load_checkpoint(resume_path, model, optimizer)
         if dataset_state is not None:
             dataset.load_state_dict(dataset_state)
         logger.info("resumed from checkpoint at step %d", step, extra={"step": step})
@@ -84,11 +87,15 @@ def train(
     wandb.init(
         project=train_cfg.wandb_project,
         mode=train_cfg.wandb_mode,  # type: ignore[arg-type]
-        config=asdict(train_cfg),
+        config={**asdict(train_cfg), **asdict(model_cfg)},
     )
 
     checkpoint_dir = Path(train_cfg.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    # Must save before the first encode_batch call: encode_batch mutates the tokenizer's
+    # truncation/padding state via enable_truncation/enable_padding, and that mutated state
+    # gets serialized into tokenizer.json. Saving later would silently persist the wrong
+    # truncation/padding length for anything (e.g. generate.py) that loads this file.
     tokenizer.save(str(checkpoint_dir / "tokenizer.json"))
     logger.info("saved tokenizer to %s", checkpoint_dir / "tokenizer.json")
 

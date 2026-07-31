@@ -25,24 +25,30 @@ def generate_token_ids(
     temperature: float = 1.0,
 ) -> list[int]:
     prompt_ids = tokenizer.encode(prompt).ids
+    if not prompt_ids:
+        raise ValueError("prompt encoded to zero tokens")
     if max_new_tokens <= 0:
         return prompt_ids
 
+    was_training = model.training
     model.eval()
-    device = next(model.parameters()).device
-    input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+    try:
+        device = next(model.parameters()).device
+        input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 
-    cache = KVCache()
-    generated_ids = list(prompt_ids)
-    with torch.no_grad():
-        logits = model(input_ids, cache=cache)
-        next_id = _sample(logits[:, -1, :], temperature)
-        generated_ids.append(next_id)
-        for _ in range(max_new_tokens - 1):
-            step_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
-            logits = model(step_input, cache=cache)
+        cache = KVCache()
+        generated_ids = list(prompt_ids)
+        with torch.no_grad():
+            logits = model(input_ids, cache=cache)
             next_id = _sample(logits[:, -1, :], temperature)
             generated_ids.append(next_id)
+            for _ in range(max_new_tokens - 1):
+                step_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
+                logits = model(step_input, cache=cache)
+                next_id = _sample(logits[:, -1, :], temperature)
+                generated_ids.append(next_id)
+    finally:
+        model.train(was_training)
 
     return generated_ids
 
@@ -69,15 +75,22 @@ def main() -> None:
 
     checkpoint_path = Path(args.checkpoint)
     tokenizer_path = (
-        Path(args.tokenizer_path) if args.tokenizer_path else checkpoint_path.parent / "tokenizer.json"
+        Path(args.tokenizer_path)
+        if args.tokenizer_path
+        else checkpoint_path.parent / "tokenizer.json"
     )
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
-    # ModelConfig() defaults must match the training-time architecture. train.py's
-    # CLI doesn't yet override architecture fields (only max_steps/batch_size/lr/
-    # checkpoint_dir), so this holds today; a future config-rightsizing spec that
-    # adds architecture CLI overrides to train.py must persist them for generate.py too.
-    model_cfg = ModelConfig(vocab_size=tokenizer.get_vocab_size())
+    # Peek the checkpoint for its persisted model_config so architecture fields that change
+    # numerics without changing tensor shapes (e.g. rope_theta) can't silently drift from
+    # what the checkpoint was actually trained with. Older checkpoints saved before
+    # model_config was persisted fall back to ModelConfig() defaults, as before.
+    raw_checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    saved_model_config = raw_checkpoint.get("model_config")
+    if saved_model_config is not None:
+        model_cfg = ModelConfig(**{**saved_model_config, "vocab_size": tokenizer.get_vocab_size()})
+    else:
+        model_cfg = ModelConfig(vocab_size=tokenizer.get_vocab_size())
     model = MinimalTransformerLM(model_cfg)
     # load_checkpoint requires an optimizer arg; inference discards it.
     dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)

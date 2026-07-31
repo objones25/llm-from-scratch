@@ -16,6 +16,11 @@ class ModelConfig:
     n_layers: int = 2
     n_heads: int = 4
     n_kv_heads: int = 1
+    # Informational only: RoPE computes cos/sin on the fly per forward call sized to the
+    # actual seq_len passed in, so the model has no fixed context-length ceiling and does
+    # not consume this field. train.py still sets it (from data_cfg.max_seq_len) for
+    # documentation/future use; it can silently drift from the data pipeline's actual
+    # sequence length with no effect on the model.
     max_seq_len: int = 128
     dropout: float = 0.0
     rope_theta: float = 10000.0
