@@ -89,6 +89,8 @@ def train(
 
     checkpoint_dir = Path(train_cfg.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    tokenizer.save(str(checkpoint_dir / "tokenizer.json"))
+    logger.info("saved tokenizer to %s", checkpoint_dir / "tokenizer.json")
 
     pad_id = tokenizer.token_to_id(PAD_TOKEN)
     assert pad_id is not None
