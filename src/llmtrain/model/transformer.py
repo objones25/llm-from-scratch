@@ -47,9 +47,9 @@ class MLP(nn.Module):
 class Block(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
-        self.ln1 = nn.LayerNorm(config.d_model)
+        self.ln1 = nn.RMSNorm(config.d_model)
         self.attn = CausalSelfAttention(config)
-        self.ln2 = nn.LayerNorm(config.d_model)
+        self.ln2 = nn.RMSNorm(config.d_model)
         self.mlp = MLP(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -65,7 +65,7 @@ class MinimalTransformerLM(nn.Module):
         self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
         self.pos_emb = nn.Embedding(config.max_seq_len, config.d_model)
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layers)])
-        self.ln_f = nn.LayerNorm(config.d_model)
+        self.ln_f = nn.RMSNorm(config.d_model)
         self.head = nn.Linear(config.d_model, config.vocab_size, bias=False)
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:

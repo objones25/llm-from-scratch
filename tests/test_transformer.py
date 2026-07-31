@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 
 from llmtrain.model.transformer import MinimalTransformerLM
 from llmtrain.training.config import ModelConfig
@@ -22,3 +23,10 @@ def test_backward_populates_gradients_for_every_parameter():
     logits.sum().backward()
     for name, param in model.named_parameters():
         assert param.grad is not None, f"{name} received no gradient"
+
+
+def test_uses_rmsnorm_not_layernorm():
+    model = MinimalTransformerLM(_tiny_config())
+    assert isinstance(model.blocks[0].ln1, nn.RMSNorm)
+    assert isinstance(model.blocks[0].ln2, nn.RMSNorm)
+    assert isinstance(model.ln_f, nn.RMSNorm)
