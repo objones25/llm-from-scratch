@@ -25,6 +25,8 @@ class ModelConfig:
 class TrainConfig:
     batch_size: int = 32
     lr: float = 3e-4
+    min_lr: float = 3e-5
+    warmup_steps: int = 200
     weight_decay: float = 0.01
     beta1: float = 0.9
     beta2: float = 0.999

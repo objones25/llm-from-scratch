@@ -1,5 +1,7 @@
 import argparse
 import logging
+import math
+import os
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
@@ -42,6 +44,18 @@ def make_collate_fn(tokenizer: Tokenizer, max_seq_len: int) -> Callable[[list[di
     return collate
 
 
+def get_lr(step: int, train_cfg: TrainConfig) -> float:
+    # Linear warmup then cosine decay to min_lr (nanoGPT-style). Pure function of `step`,
+    # so resuming from a checkpoint needs no separate scheduler state to persist.
+    if step < train_cfg.warmup_steps:
+        return train_cfg.lr * (step + 1) / train_cfg.warmup_steps
+    if step >= train_cfg.max_steps:
+        return train_cfg.min_lr
+    decay_ratio = (step - train_cfg.warmup_steps) / (train_cfg.max_steps - train_cfg.warmup_steps)
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    return train_cfg.min_lr + coeff * (train_cfg.lr - train_cfg.min_lr)
+
+
 def train(
     data_cfg: DataConfig,
     model_cfg: ModelConfig,
@@ -49,9 +63,16 @@ def train(
     resume_path: str | None = None,
 ) -> None:
     configure_logging(log_file=train_cfg.log_file)
+    # Must be set before any CUDA allocation happens (the allocator reads it lazily on
+    # first use) — reduces fragmentation-driven OOMs on long runs. No-op on MPS/CPU.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     torch.manual_seed(train_cfg.seed)
     device = select_device()
     logger.info("training on device %s", device.type, extra={"device": device.type})
+    if device.type == "cuda":
+        # TF32 matmuls: near-free throughput on Ampere+ (A100) with negligible precision
+        # loss for a model already training under bf16 autocast; no effect on MPS/CPU.
+        torch.set_float32_matmul_precision("high")
 
     dataset = load_streaming_dataset(
         data_cfg.dataset_name, seed=train_cfg.seed, buffer_size=data_cfg.shuffle_buffer_size
@@ -86,6 +107,9 @@ def train(
         dataset,  # type: ignore[arg-type]  # IterableDataset isn't in DataLoader's stub overloads, but is supported at runtime
         batch_size=train_cfg.batch_size,
         pin_memory=True,
+        # A ragged final batch would force torch.compile to recompile for the new shape,
+        # spiking memory mid-run; dropping it keeps every batch's shape constant.
+        drop_last=True,
         collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len),
     )
 
@@ -125,11 +149,15 @@ def train(
                 logits = model(input_ids)
                 loss = next_token_loss(logits, input_ids, pad_id)
 
+            lr = get_lr(step, train_cfg)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            wandb.log({"loss": loss.item()}, step=step)
+            wandb.log({"loss": loss.item(), "lr": lr}, step=step)
             logger.debug("step %d complete", step, extra={"step": step})
 
             step += 1
@@ -173,6 +201,8 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=TrainConfig.max_steps)
     parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
     parser.add_argument("--lr", type=float, default=TrainConfig.lr)
+    parser.add_argument("--min-lr", type=float, default=TrainConfig.min_lr)
+    parser.add_argument("--warmup-steps", type=int, default=TrainConfig.warmup_steps)
     parser.add_argument("--weight-decay", type=float, default=TrainConfig.weight_decay)
     parser.add_argument("--beta1", type=float, default=TrainConfig.beta1)
     parser.add_argument("--beta2", type=float, default=TrainConfig.beta2)
@@ -213,6 +243,8 @@ def main() -> None:
     train_cfg = TrainConfig(
         batch_size=args.batch_size,
         lr=args.lr,
+        min_lr=args.min_lr,
+        warmup_steps=args.warmup_steps,
         weight_decay=args.weight_decay,
         beta1=args.beta1,
         beta2=args.beta2,

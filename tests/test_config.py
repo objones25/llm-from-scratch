@@ -30,6 +30,8 @@ def test_train_config_has_sensible_defaults():
     assert cfg.weight_decay >= 0
     assert 0 < cfg.beta1 < 1
     assert 0 < cfg.beta2 < 1
+    assert 0 < cfg.min_lr < cfg.lr
+    assert cfg.warmup_steps >= 0
 
 
 def test_generation_config_has_sensible_defaults():
