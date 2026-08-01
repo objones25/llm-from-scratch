@@ -142,3 +142,22 @@ class TransformerLM(nn.Module):
             x = block(x, position_offset=position_offset, cache=cache, layer_idx=layer_idx)
         x = self.ln_f(x)
         return self.head(x)
+
+
+if __name__ == "__main__":
+    from torchinfo import summary
+
+    from llmtrain.training.config import DataConfig
+
+    model_cfg = ModelConfig()
+    data_cfg = DataConfig()
+    model = TransformerLM(model_cfg)
+    dummy_input_ids = torch.randint(0, model_cfg.vocab_size, (1, data_cfg.max_seq_len))
+    summary(model, input_data=dummy_input_ids)
+
+    # torchinfo's own "Total params" double-counts weight-tied layers (it sums each
+    # submodule's parameters independently, so head.weight is counted again even though
+    # `self.head.weight = self.token_emb.weight` makes it the same tensor as token_emb).
+    # model.parameters() dedupes shared tensors by default, giving the true distinct count.
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Distinct parameters (weight tying deduplicated): {total_params:,}")
