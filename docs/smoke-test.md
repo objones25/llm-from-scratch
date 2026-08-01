@@ -44,17 +44,30 @@ https://wandb.ai/settings#apikeys and fix `.env`, then retry.
 
 ## 4. Run the smoke test
 
+`config.py`'s baked-in defaults now target the real `fineweb_edu`
+pretraining run (~101M params, `d_model=768`, `n_layers=12`,
+`max_seq_len=2048`) — far too large for a quick local check. The CLI
+exposes every `DataConfig`/`ModelConfig`/`TrainConfig` field as a flag
+(see `--help`), so the smoke test overrides architecture down to the
+original toy scale on top of the dataset/step/checkpoint overrides:
+
 ```bash
 uv run --env-file .env python -m llmtrain.training.train \
-    --dataset tiny_shakespeare --max-steps 50 --batch-size 4 --checkpoint-interval 50
+    --dataset tiny_shakespeare --max-steps 50 --batch-size 4 --checkpoint-interval 50 \
+    --d-model 128 --n-layers 2 --n-heads 4 --n-kv-heads 2 \
+    --max-seq-len 128 --tokenizer-vocab-size 1000 --warmup-steps 5
 ```
 
 This streams `Trelis/tiny-shakespeare`, trains a tiny BPE tokenizer on a
-sample of it, builds the transformer, and runs 50 training steps on
-CPU/MPS, logging to W&B and to `app.log` (JSONL). `--checkpoint-interval 50`
-overrides `TrainConfig`'s production default of 1000 so this quick run
-actually produces a checkpoint (see step 4) instead of finishing before the
-first checkpoint interval.
+sample of it, builds a tiny transformer (2 layers, `d_model=128`), and runs
+50 training steps on CPU/MPS, logging to W&B and to `app.log` (JSONL).
+`--checkpoint-interval 50` overrides `TrainConfig`'s production default of
+1000 so this quick run actually produces a checkpoint (see step 4) instead
+of finishing before the first checkpoint interval. `--warmup-steps 5`
+overrides `TrainConfig`'s production default of 200 — at the production
+default, `get_lr`'s linear warmup never gets past ~25% of `--lr` within
+only 50 steps, and the loss barely moves; scaling warmup down with the run
+length keeps the LR schedule actually engaged.
 
 ## 5. Check all four success criteria
 
