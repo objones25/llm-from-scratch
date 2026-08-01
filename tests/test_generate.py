@@ -3,7 +3,14 @@ import torch
 from tokenizers import Tokenizer
 
 from llmtrain.data.tokenizer import train_tokenizer
-from llmtrain.generate import generate, generate_token_ids
+from llmtrain.generate import (
+    _apply_repetition_penalty,
+    _apply_top_k,
+    _apply_top_p,
+    _sample,
+    generate,
+    generate_token_ids,
+)
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
 from llmtrain.training.config import ModelConfig
@@ -62,6 +69,60 @@ def test_generate_token_ids_restores_callers_training_mode():
     model.train()
     generate_token_ids(model, tokenizer, "hello", max_new_tokens=3, temperature=0.0)
     assert model.training is True
+
+
+def test_repetition_penalty_divides_positive_seen_logit():
+    logits = torch.tensor([[5.0, 1.0, -2.0]])
+    penalized = _apply_repetition_penalty(logits, generated_ids=[0], penalty=2.0)
+    assert penalized[0, 0].item() == pytest.approx(2.5)
+    assert penalized[0, 1].item() == pytest.approx(1.0)
+    assert penalized[0, 2].item() == pytest.approx(-2.0)
+
+
+def test_repetition_penalty_multiplies_negative_seen_logit():
+    logits = torch.tensor([[-2.0, 1.0]])
+    penalized = _apply_repetition_penalty(logits, generated_ids=[0], penalty=2.0)
+    assert penalized[0, 0].item() == pytest.approx(-4.0)
+
+
+def test_repetition_penalty_is_noop_at_default_value():
+    logits = torch.tensor([[5.0, 1.0]])
+    penalized = _apply_repetition_penalty(logits, generated_ids=[0, 1], penalty=1.0)
+    assert torch.equal(penalized, logits)
+
+
+def test_top_k_keeps_only_top_k_tokens():
+    logits = torch.tensor([[5.0, 4.0, 3.0, 2.0, 1.0]])
+    filtered = _apply_top_k(logits, top_k=2)
+    kept = filtered[0] > float("-inf")
+    assert kept.tolist() == [True, True, False, False, False]
+
+
+def test_top_k_is_noop_when_disabled():
+    logits = torch.tensor([[5.0, 4.0, 3.0]])
+    filtered = _apply_top_k(logits, top_k=0)
+    assert torch.equal(filtered, logits)
+
+
+def test_top_p_keeps_smallest_set_covering_cumulative_probability():
+    logits = torch.log(torch.tensor([[0.5, 0.3, 0.15, 0.05]]))
+    filtered = _apply_top_p(logits, top_p=0.4)
+    kept = filtered[0] > float("-inf")
+    assert kept.tolist() == [True, False, False, False]
+
+
+def test_top_p_is_noop_at_default_value():
+    logits = torch.tensor([[5.0, 4.0, 3.0]])
+    filtered = _apply_top_p(logits, top_p=1.0)
+    assert torch.equal(filtered, logits)
+
+
+def test_repetition_penalty_avoids_repeating_top_greedy_token():
+    logits = torch.tensor([[5.0, 4.9, 1.0]])
+    next_id = _sample(
+        logits, generated_ids=[0], temperature=0.0, repetition_penalty=1.5, top_k=0, top_p=1.0
+    )
+    assert next_id == 1
 
 
 def test_generate_works_after_checkpoint_and_tokenizer_round_trip(tmp_path):
