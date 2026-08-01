@@ -33,7 +33,7 @@ model/transformer.py  # TransformerLM: RoPE, RMSNorm, SwiGLU MLP, weight-tied em
                        # not cached-decode-safe, so masking is skipped for single-token cached decode
                        # instead — and a KV-cache-aware forward (position_offset/cache/layer_idx threaded through)
 model/cache.py         # KVCache: per-layer (k, v) tensor cache, update() concatenates along seq dim
-training/config.py    # DataConfig/ModelConfig/TrainConfig dataclasses, no YAML layer
+training/config.py    # DataConfig/ModelConfig/TrainConfig/GenerationConfig dataclasses, no YAML layer
 training/train.py      # select_device, next_token_loss, make_collate_fn, train(), main() — the training entry point
 training/checkpoint.py # saves/loads model + optimizer + dataset iterator state + model architecture config as one unit
 generate.py             # KV-cache-backed text generation from a checkpoint; main() is a second CLI entry point
@@ -44,14 +44,14 @@ logging_config.py       # dictConfig: stdout + JSONL file handler
 python -m llmtrain.training.train --dataset <tiny_shakespeare|reformer_enwik8|fineweb_edu> \
     [--max-steps N] [--batch-size N] [--lr F] [--checkpoint-dir DIR] [--resume PATH]
 ```
-Same code path for local smoke tests, the A100 smoke test, and the real pretraining run — `--checkpoint-dir` is the only thing that needs to change for RunPod (point it at the mounted network volume).
+Same code path for local smoke tests, the A100 smoke test, and the real pretraining run — `--checkpoint-dir` is the only thing that needs to change for RunPod (point it at the mounted network volume). Every `DataConfig`/`ModelConfig`/`TrainConfig` field is exposed as a CLI flag (`--d-model`, `--n-layers`, `--n-kv-heads`, `--dropout`, `--rope-theta`, `--weight-decay`, `--beta1`/`--beta2`, `--seed`, `--compile`/`--no-compile`, `--use-amp`/`--no-use-amp`, `--wandb-project`, `--wandb-mode`, etc. — run `--help` for the full list); each flag's default reads from the corresponding dataclass field (e.g. `default=TrainConfig.checkpoint_interval`) rather than a duplicated literal, so the dataclasses are the single source of truth for defaults.
 
-A second CLI entry point, `generate.py`, runs inference from a trained checkpoint (greedy or temperature-sampled decoding, KV-cache-backed):
+A second CLI entry point, `generate.py`, runs inference from a trained checkpoint (greedy or temperature-sampled decoding, KV-cache-backed, with repetition penalty and top-k/top-p sampling):
 ```
 python -m llmtrain.generate --checkpoint <path/to/step_N.pt> [--tokenizer-path PATH] \
-    --prompt "..." [--max-new-tokens N] [--temperature F]
+    --prompt "..." [--max-new-tokens N] [--temperature F] [--repetition-penalty F] [--top-k N] [--top-p F]
 ```
-`--tokenizer-path` defaults to `tokenizer.json` next to the checkpoint (saved alongside checkpoints by `train.py`). Model architecture is reconstructed from the `model_config` persisted in the checkpoint (falls back to `ModelConfig()` defaults for older checkpoints saved before that field existed).
+`--tokenizer-path` defaults to `tokenizer.json` next to the checkpoint (saved alongside checkpoints by `train.py`). Sampling defaults live in `GenerationConfig` (`training/config.py`), shared as the single source of truth between the CLI flag defaults and the `generate()`/`generate_token_ids()` signatures (both take a `GenerationConfig` instead of five separate parameters). Model architecture is reconstructed from the `model_config` persisted in the checkpoint (falls back to `ModelConfig()` defaults for older checkpoints saved before that field existed).
 
 ## Device handling (MPS vs CUDA)
 

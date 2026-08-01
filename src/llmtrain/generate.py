@@ -7,7 +7,7 @@ from tokenizers import Tokenizer
 from llmtrain.model.cache import KVCache
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.checkpoint import load_checkpoint
-from llmtrain.training.config import ModelConfig
+from llmtrain.training.config import GenerationConfig, ModelConfig
 
 
 def _apply_repetition_penalty(
@@ -44,7 +44,9 @@ def _apply_top_p(logits: torch.Tensor, top_p: float) -> torch.Tensor:
     sorted_indices_to_remove = cumulative_probs > top_p
     sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
     sorted_indices_to_remove[..., 0] = False
-    indices_to_remove = sorted_indices_to_remove.scatter(-1, sorted_indices, sorted_indices_to_remove)
+    indices_to_remove = sorted_indices_to_remove.scatter(
+        -1, sorted_indices, sorted_indices_to_remove
+    )
     return logits.masked_fill(indices_to_remove, float("-inf"))
 
 
@@ -72,16 +74,12 @@ def generate_token_ids(
     model: TransformerLM,
     tokenizer: Tokenizer,
     prompt: str,
-    max_new_tokens: int,
-    temperature: float = 1.0,
-    repetition_penalty: float = 1.0,
-    top_k: int = 0,
-    top_p: float = 1.0,
+    config: GenerationConfig,
 ) -> list[int]:
     prompt_ids = tokenizer.encode(prompt).ids
     if not prompt_ids:
         raise ValueError("prompt encoded to zero tokens")
-    if max_new_tokens <= 0:
+    if config.max_new_tokens <= 0:
         return prompt_ids
 
     was_training = model.training
@@ -94,13 +92,20 @@ def generate_token_ids(
         generated_ids = list(prompt_ids)
 
         def sample_next(logits: torch.Tensor) -> int:
-            return _sample(logits, generated_ids, temperature, repetition_penalty, top_k, top_p)
+            return _sample(
+                logits,
+                generated_ids,
+                config.temperature,
+                config.repetition_penalty,
+                config.top_k,
+                config.top_p,
+            )
 
         with torch.no_grad():
             logits = model(input_ids, cache=cache)
             next_id = sample_next(logits[:, -1, :])
             generated_ids.append(next_id)
-            for _ in range(max_new_tokens - 1):
+            for _ in range(config.max_new_tokens - 1):
                 step_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
                 logits = model(step_input, cache=cache)
                 next_id = sample_next(logits[:, -1, :])
@@ -115,15 +120,9 @@ def generate(
     model: TransformerLM,
     tokenizer: Tokenizer,
     prompt: str,
-    max_new_tokens: int,
-    temperature: float = 1.0,
-    repetition_penalty: float = 1.0,
-    top_k: int = 0,
-    top_p: float = 1.0,
+    config: GenerationConfig,
 ) -> str:
-    token_ids = generate_token_ids(
-        model, tokenizer, prompt, max_new_tokens, temperature, repetition_penalty, top_k, top_p
-    )
+    token_ids = generate_token_ids(model, tokenizer, prompt, config)
     return tokenizer.decode(token_ids)
 
 
@@ -132,11 +131,13 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--tokenizer-path", type=str, default=None)
     parser.add_argument("--prompt", type=str, required=True)
-    parser.add_argument("--max-new-tokens", type=int, default=50)
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--repetition-penalty", type=float, default=1.0)
-    parser.add_argument("--top-k", type=int, default=0)
-    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--max-new-tokens", type=int, default=GenerationConfig.max_new_tokens)
+    parser.add_argument("--temperature", type=float, default=GenerationConfig.temperature)
+    parser.add_argument(
+        "--repetition-penalty", type=float, default=GenerationConfig.repetition_penalty
+    )
+    parser.add_argument("--top-k", type=int, default=GenerationConfig.top_k)
+    parser.add_argument("--top-p", type=float, default=GenerationConfig.top_p)
     args = parser.parse_args()
 
     checkpoint_path = Path(args.checkpoint)
@@ -162,16 +163,14 @@ def main() -> None:
     dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)
     load_checkpoint(checkpoint_path, model, dummy_optimizer)
 
-    output = generate(
-        model,
-        tokenizer,
-        args.prompt,
-        args.max_new_tokens,
-        args.temperature,
-        args.repetition_penalty,
-        args.top_k,
-        args.top_p,
+    generation_cfg = GenerationConfig(
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        repetition_penalty=args.repetition_penalty,
+        top_k=args.top_k,
+        top_p=args.top_p,
     )
+    output = generate(model, tokenizer, args.prompt, generation_cfg)
     print(output)
 
 

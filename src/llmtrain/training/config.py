@@ -3,34 +3,32 @@ from dataclasses import dataclass
 
 @dataclass
 class DataConfig:
-    dataset_name: str = "tiny_shakespeare"
+    dataset_name: str = "fineweb_edu"
     shuffle_buffer_size: int = 1000
-    max_seq_len: int = 128
-    tokenizer_vocab_size: int = 8000
+    max_seq_len: int = 2048
+    tokenizer_vocab_size: int = 32768
+    tokenizer_sample_size: int = 200
 
 
 @dataclass
 class ModelConfig:
-    vocab_size: int = 1000
-    d_model: int = 128
-    n_layers: int = 2
-    n_heads: int = 4
-    n_kv_heads: int = 1
-    # Informational only: RoPE computes cos/sin on the fly per forward call sized to the
-    # actual seq_len passed in, so the model has no fixed context-length ceiling and does
-    # not consume this field. train.py still sets it (from data_cfg.max_seq_len) for
-    # documentation/future use; it can silently drift from the data pipeline's actual
-    # sequence length with no effect on the model.
-    max_seq_len: int = 128
+    vocab_size: int = 32768
+    d_model: int = 768
+    n_layers: int = 12
+    n_heads: int = 12
+    n_kv_heads: int = 4
     dropout: float = 0.0
     rope_theta: float = 10000.0
 
 
 @dataclass
 class TrainConfig:
-    batch_size: int = 8
+    batch_size: int = 32
     lr: float = 3e-4
-    max_steps: int = 100
+    weight_decay: float = 0.01
+    beta1: float = 0.9
+    beta2: float = 0.999
+    max_steps: int = 10000
     seed: int = 42
     checkpoint_dir: str = "checkpoints"
     checkpoint_interval: int = 1000
@@ -39,3 +37,12 @@ class TrainConfig:
     wandb_project: str = "llm-training"
     wandb_mode: str = "online"
     log_file: str = "app.log"
+
+
+@dataclass
+class GenerationConfig:
+    max_new_tokens: int = 50
+    temperature: float = 1.0
+    repetition_penalty: float = 1.0
+    top_k: int = 0
+    top_p: float = 1.0

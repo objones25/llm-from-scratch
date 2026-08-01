@@ -14,7 +14,7 @@ from llmtrain.training.config import ModelConfig
 
 
 def _tiny_config() -> ModelConfig:
-    return ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=2, max_seq_len=6, dropout=0.0)
+    return ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=2, n_kv_heads=1, dropout=0.0)
 
 
 def test_forward_produces_correct_output_shape():
@@ -94,10 +94,8 @@ def test_rope_is_identity_at_position_zero():
     assert torch.allclose(rotated, x, atol=1e-6)
 
 
-def test_forward_handles_seq_len_larger_than_max_seq_len_used_at_construction():
-    config = ModelConfig(
-        vocab_size=16, d_model=8, n_layers=1, n_heads=2, max_seq_len=6, dropout=0.0
-    )
+def test_forward_handles_arbitrarily_long_sequences():
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=1, n_heads=2, n_kv_heads=1, dropout=0.0)
     model = TransformerLM(config)
     input_ids = torch.randint(0, 16, (2, 50))
     logits = model(input_ids)
@@ -105,18 +103,14 @@ def test_forward_handles_seq_len_larger_than_max_seq_len_used_at_construction():
 
 
 def test_gqa_projections_are_sized_for_fewer_kv_heads():
-    config = ModelConfig(
-        vocab_size=16, d_model=8, n_layers=1, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
-    )
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=1, n_heads=4, n_kv_heads=2, dropout=0.0)
     attn = CausalSelfAttention(config)
     assert attn.q_proj.out_features == config.n_heads * attn.head_dim
     assert attn.kv_proj.out_features == 2 * config.n_kv_heads * attn.head_dim
 
 
 def test_forward_works_with_grouped_query_attention():
-    config = ModelConfig(
-        vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
-    )
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, dropout=0.0)
     model = TransformerLM(config)
     input_ids = torch.randint(0, 16, (2, 6))
     logits = model(input_ids)
@@ -125,18 +119,14 @@ def test_forward_works_with_grouped_query_attention():
 
 
 def test_n_heads_must_be_divisible_by_n_kv_heads():
-    config = ModelConfig(
-        vocab_size=16, d_model=8, n_layers=1, n_heads=4, n_kv_heads=3, max_seq_len=6, dropout=0.0
-    )
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=1, n_heads=4, n_kv_heads=3, dropout=0.0)
     with pytest.raises(ValueError):
         CausalSelfAttention(config)
 
 
 def test_cached_decoding_matches_uncached_forward():
     torch.manual_seed(0)
-    config = ModelConfig(
-        vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
-    )
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, dropout=0.0)
     model = TransformerLM(config)
     model.eval()
     input_ids = torch.randint(0, 16, (1, 5))
@@ -156,9 +146,7 @@ def test_cached_decoding_matches_uncached_forward():
 
 
 def test_multi_token_query_against_nonempty_cache_raises():
-    config = ModelConfig(
-        vocab_size=16, d_model=8, n_layers=1, n_heads=2, n_kv_heads=1, max_seq_len=6, dropout=0.0
-    )
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=1, n_heads=2, n_kv_heads=1, dropout=0.0)
     model = TransformerLM(config)
     model.eval()
     cache = KVCache()
@@ -170,9 +158,7 @@ def test_multi_token_query_against_nonempty_cache_raises():
 
 def test_multi_token_prefill_with_cache_matches_uncached():
     torch.manual_seed(0)
-    config = ModelConfig(
-        vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=6, dropout=0.0
-    )
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=4, n_kv_heads=2, dropout=0.0)
     model = TransformerLM(config)
     model.eval()
     input_ids = torch.randint(0, 16, (1, 5))

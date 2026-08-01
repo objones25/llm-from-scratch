@@ -49,23 +49,28 @@ def train(
     resume_path: str | None = None,
 ) -> None:
     configure_logging(log_file=train_cfg.log_file)
+    torch.manual_seed(train_cfg.seed)
     device = select_device()
     logger.info("training on device %s", device.type, extra={"device": device.type})
 
     dataset = load_streaming_dataset(
         data_cfg.dataset_name, seed=train_cfg.seed, buffer_size=data_cfg.shuffle_buffer_size
     )
-    sample_texts = [example["text"] for example in dataset.take(200)]
+    sample_texts = [example["text"] for example in dataset.take(data_cfg.tokenizer_sample_size)]
     tokenizer = train_tokenizer(sample_texts, vocab_size=data_cfg.tokenizer_vocab_size)
     model_cfg.vocab_size = tokenizer.get_vocab_size()
-    model_cfg.max_seq_len = data_cfg.max_seq_len
 
     model: torch.nn.Module = TransformerLM(model_cfg).to(device)
     if device.type == "cuda" and train_cfg.compile:
         # torch.compile's stub returns a broad callable type; the object is
         # still an nn.Module at runtime, hence the explicit annotation above.
         model = torch.compile(model)  # type: ignore[assignment]
-    optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=train_cfg.lr,
+        betas=(train_cfg.beta1, train_cfg.beta2),
+        weight_decay=train_cfg.weight_decay,
+    )
 
     step = 0
     if resume_path is not None:
@@ -149,24 +154,77 @@ def main() -> None:
     parser.add_argument(
         "--dataset",
         choices=["tiny_shakespeare", "reformer_enwik8", "fineweb_edu"],
-        default="tiny_shakespeare",
+        default=DataConfig.dataset_name,
     )
-    parser.add_argument("--max-steps", type=int, default=50)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
+    parser.add_argument("--shuffle-buffer-size", type=int, default=DataConfig.shuffle_buffer_size)
+    parser.add_argument("--max-seq-len", type=int, default=DataConfig.max_seq_len)
+    parser.add_argument("--tokenizer-vocab-size", type=int, default=DataConfig.tokenizer_vocab_size)
+    parser.add_argument(
+        "--tokenizer-sample-size", type=int, default=DataConfig.tokenizer_sample_size
+    )
+
+    parser.add_argument("--d-model", type=int, default=ModelConfig.d_model)
+    parser.add_argument("--n-layers", type=int, default=ModelConfig.n_layers)
+    parser.add_argument("--n-heads", type=int, default=ModelConfig.n_heads)
+    parser.add_argument("--n-kv-heads", type=int, default=ModelConfig.n_kv_heads)
+    parser.add_argument("--dropout", type=float, default=ModelConfig.dropout)
+    parser.add_argument("--rope-theta", type=float, default=ModelConfig.rope_theta)
+
+    parser.add_argument("--max-steps", type=int, default=TrainConfig.max_steps)
+    parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
+    parser.add_argument("--lr", type=float, default=TrainConfig.lr)
+    parser.add_argument("--weight-decay", type=float, default=TrainConfig.weight_decay)
+    parser.add_argument("--beta1", type=float, default=TrainConfig.beta1)
+    parser.add_argument("--beta2", type=float, default=TrainConfig.beta2)
+    parser.add_argument("--seed", type=int, default=TrainConfig.seed)
+    parser.add_argument("--checkpoint-dir", type=str, default=TrainConfig.checkpoint_dir)
     parser.add_argument("--checkpoint-interval", type=int, default=TrainConfig.checkpoint_interval)
+    parser.add_argument(
+        "--compile", action=argparse.BooleanOptionalAction, default=TrainConfig.compile
+    )
+    parser.add_argument(
+        "--use-amp", action=argparse.BooleanOptionalAction, default=TrainConfig.use_amp
+    )
+    parser.add_argument("--wandb-project", type=str, default=TrainConfig.wandb_project)
+    parser.add_argument(
+        "--wandb-mode",
+        choices=["online", "offline", "disabled"],
+        default=TrainConfig.wandb_mode,
+    )
+    parser.add_argument("--log-file", type=str, default=TrainConfig.log_file)
     parser.add_argument("--resume", type=str, default=None)
     args = parser.parse_args()
 
-    data_cfg = DataConfig(dataset_name=args.dataset)
-    model_cfg = ModelConfig()
+    data_cfg = DataConfig(
+        dataset_name=args.dataset,
+        shuffle_buffer_size=args.shuffle_buffer_size,
+        max_seq_len=args.max_seq_len,
+        tokenizer_vocab_size=args.tokenizer_vocab_size,
+        tokenizer_sample_size=args.tokenizer_sample_size,
+    )
+    model_cfg = ModelConfig(
+        d_model=args.d_model,
+        n_layers=args.n_layers,
+        n_heads=args.n_heads,
+        n_kv_heads=args.n_kv_heads,
+        dropout=args.dropout,
+        rope_theta=args.rope_theta,
+    )
     train_cfg = TrainConfig(
-        max_steps=args.max_steps,
         batch_size=args.batch_size,
         lr=args.lr,
+        weight_decay=args.weight_decay,
+        beta1=args.beta1,
+        beta2=args.beta2,
+        max_steps=args.max_steps,
+        seed=args.seed,
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_interval=args.checkpoint_interval,
+        compile=args.compile,
+        use_amp=args.use_amp,
+        wandb_project=args.wandb_project,
+        wandb_mode=args.wandb_mode,
+        log_file=args.log_file,
     )
     train(data_cfg, model_cfg, train_cfg, resume_path=args.resume)
 

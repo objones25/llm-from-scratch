@@ -99,3 +99,19 @@ Once all four checks pass:
 ```bash
 git commit --allow-empty -m "chore: confirm tiny_shakespeare smoke test passes end-to-end"
 ```
+
+## 7. Larger test run on reformer_enwik8
+
+`ModelConfig`/`TrainConfig`/`DataConfig` now default to this run (~101M
+params, `d_model=768`, `n_layers=12`, `n_heads=12`, `n_kv_heads=4`,
+`vocab_size=32768`, `max_seq_len=2048`, `batch_size=32`, `max_steps=10000`)
+against `reds0510/enwik8-processed`. This is A100 scale, not a quick local
+check — run it on a rented pod, not your Mac:
+
+```bash
+uv run --env-file .env python -m llmtrain.training.train \
+    --dataset reformer_enwik8
+```
+
+No flags needed beyond `--dataset` since the defaults already match. Same
+four checks as step 5 apply; checkpoints land every 1000 steps.

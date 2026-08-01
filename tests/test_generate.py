@@ -13,7 +13,7 @@ from llmtrain.generate import (
 )
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
-from llmtrain.training.config import ModelConfig
+from llmtrain.training.config import GenerationConfig, ModelConfig
 
 
 def _tiny_setup() -> tuple[TransformerLM, Tokenizer]:
@@ -24,7 +24,6 @@ def _tiny_setup() -> tuple[TransformerLM, Tokenizer]:
         n_layers=2,
         n_heads=4,
         n_kv_heads=2,
-        max_seq_len=16,
         dropout=0.0,
     )
     model = TransformerLM(config)
@@ -35,15 +34,18 @@ def test_generate_token_ids_produces_requested_number_of_new_tokens():
     torch.manual_seed(0)
     model, tokenizer = _tiny_setup()
     prompt_ids = tokenizer.encode("hello").ids
-    output_ids = generate_token_ids(model, tokenizer, "hello", max_new_tokens=5, temperature=0.0)
+    output_ids = generate_token_ids(
+        model, tokenizer, "hello", GenerationConfig(max_new_tokens=5, temperature=0.0)
+    )
     assert len(output_ids) == len(prompt_ids) + 5
 
 
 def test_greedy_decoding_is_deterministic():
     torch.manual_seed(0)
     model, tokenizer = _tiny_setup()
-    output_a = generate(model, tokenizer, "hello", max_new_tokens=5, temperature=0.0)
-    output_b = generate(model, tokenizer, "hello", max_new_tokens=5, temperature=0.0)
+    config = GenerationConfig(max_new_tokens=5, temperature=0.0)
+    output_a = generate(model, tokenizer, "hello", config)
+    output_b = generate(model, tokenizer, "hello", config)
     assert output_a == output_b
 
 
@@ -51,7 +53,9 @@ def test_generate_token_ids_with_zero_max_new_tokens():
     torch.manual_seed(0)
     model, tokenizer = _tiny_setup()
     prompt_ids = tokenizer.encode("hello").ids
-    output_ids = generate_token_ids(model, tokenizer, "hello", max_new_tokens=0, temperature=0.0)
+    output_ids = generate_token_ids(
+        model, tokenizer, "hello", GenerationConfig(max_new_tokens=0, temperature=0.0)
+    )
     assert len(output_ids) == len(prompt_ids)
     assert output_ids == prompt_ids
 
@@ -60,14 +64,18 @@ def test_generate_token_ids_raises_on_empty_prompt():
     torch.manual_seed(0)
     model, tokenizer = _tiny_setup()
     with pytest.raises(ValueError):
-        generate_token_ids(model, tokenizer, "", max_new_tokens=5, temperature=0.0)
+        generate_token_ids(
+            model, tokenizer, "", GenerationConfig(max_new_tokens=5, temperature=0.0)
+        )
 
 
 def test_generate_token_ids_restores_callers_training_mode():
     torch.manual_seed(0)
     model, tokenizer = _tiny_setup()
     model.train()
-    generate_token_ids(model, tokenizer, "hello", max_new_tokens=3, temperature=0.0)
+    generate_token_ids(
+        model, tokenizer, "hello", GenerationConfig(max_new_tokens=3, temperature=0.0)
+    )
     assert model.training is True
 
 
@@ -142,12 +150,13 @@ def test_generate_works_after_checkpoint_and_tokenizer_round_trip(tmp_path):
         n_layers=2,
         n_heads=4,
         n_kv_heads=2,
-        max_seq_len=16,
         dropout=0.0,
     )
     loaded_model = TransformerLM(loaded_config)
     loaded_optimizer = torch.optim.AdamW(loaded_model.parameters(), lr=0.0)
     load_checkpoint(checkpoint_path, loaded_model, loaded_optimizer)
 
-    output = generate(loaded_model, loaded_tokenizer, "hello", max_new_tokens=3, temperature=0.0)
+    output = generate(
+        loaded_model, loaded_tokenizer, "hello", GenerationConfig(max_new_tokens=3, temperature=0.0)
+    )
     assert isinstance(output, str)

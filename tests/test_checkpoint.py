@@ -37,7 +37,6 @@ def test_checkpoint_round_trip_preserves_model_config(tmp_path):
         n_layers=2,
         n_heads=2,
         n_kv_heads=1,
-        max_seq_len=6,
         dropout=0.0,
         rope_theta=5000.0,
     )
