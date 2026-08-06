@@ -174,3 +174,32 @@ def test_multi_token_prefill_with_cache_matches_uncached():
 
     # Prefill output should match uncached forward exactly
     assert torch.allclose(uncached_logits, prefill_logits, atol=1e-5)
+
+
+def test_linear_layers_have_no_bias():
+    model = TransformerLM(_tiny_config())
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            assert module.bias is None, f"{name} has a bias, expected bias=False"
+
+
+def test_token_embedding_weight_std_is_approximately_0_02():
+    config = ModelConfig(
+        vocab_size=4000, d_model=64, n_layers=2, n_heads=2, n_kv_heads=1, dropout=0.0
+    )
+    model = TransformerLM(config)
+    assert model.token_emb.weight.std().item() == pytest.approx(0.02, abs=0.002)
+
+
+def test_residual_projections_are_scaled_down_from_plain_init():
+    config = ModelConfig(
+        vocab_size=4000, d_model=64, n_layers=6, n_heads=2, n_kv_heads=1, dropout=0.0
+    )
+    model = TransformerLM(config)
+    expected_std = 0.02 / (2 * config.n_layers) ** 0.5
+    out_proj_std = model.blocks[0].attn.out_proj.weight.std().item()
+    w_down_std = model.blocks[0].mlp.w_down.weight.std().item()
+    assert out_proj_std == pytest.approx(expected_std, rel=0.4)
+    assert w_down_std == pytest.approx(expected_std, rel=0.4)
+    assert out_proj_std < 0.02
+    assert w_down_std < 0.02

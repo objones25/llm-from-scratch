@@ -34,6 +34,12 @@ def apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch
     return x * cos + _rotate_half(x) * sin
 
 
+@torch.no_grad()
+def _init_weights(module: nn.Module) -> None:
+    if isinstance(module, (nn.Linear, nn.Embedding)):
+        nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -47,9 +53,9 @@ class CausalSelfAttention(nn.Module):
         if self.head_dim % 2 != 0:
             raise ValueError("head_dim must be even for rotary position embeddings")
         self.rope_theta = config.rope_theta
-        self.q_proj = nn.Linear(config.d_model, config.n_heads * self.head_dim)
-        self.kv_proj = nn.Linear(config.d_model, 2 * config.n_kv_heads * self.head_dim)
-        self.out_proj = nn.Linear(config.d_model, config.d_model)
+        self.q_proj = nn.Linear(config.d_model, config.n_heads * self.head_dim, bias=False)
+        self.kv_proj = nn.Linear(config.d_model, 2 * config.n_kv_heads * self.head_dim, bias=False)
+        self.out_proj = nn.Linear(config.d_model, config.d_model, bias=False)
         self.dropout = config.dropout
 
     def forward(
@@ -94,9 +100,9 @@ class MLP(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         d_ff = int(2 / 3 * 4 * config.d_model)
-        self.w_gate = nn.Linear(config.d_model, d_ff)
-        self.w_up = nn.Linear(config.d_model, d_ff)
-        self.w_down = nn.Linear(d_ff, config.d_model)
+        self.w_gate = nn.Linear(config.d_model, d_ff, bias=False)
+        self.w_up = nn.Linear(config.d_model, d_ff, bias=False)
+        self.w_down = nn.Linear(d_ff, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -134,6 +140,11 @@ class TransformerLM(nn.Module):
         self.ln_f = nn.RMSNorm(config.d_model)
         self.head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.head.weight = self.token_emb.weight
+        self.apply(_init_weights)
+        residual_std = 0.02 / (2 * config.n_layers) ** 0.5
+        for block in self.blocks:
+            nn.init.normal_(block.attn.out_proj.weight, mean=0.0, std=residual_std)
+            nn.init.normal_(block.mlp.w_down.weight, mean=0.0, std=residual_std)
 
     def forward(self, input_ids: torch.Tensor, cache: KVCache | None = None) -> torch.Tensor:
         x = self.token_emb(input_ids)
