@@ -7,11 +7,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
+import wandb
 from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-import wandb
 from llmtrain.data.streaming import load_streaming_dataset
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
@@ -34,6 +34,27 @@ def next_token_loss(logits: torch.Tensor, input_ids: torch.Tensor, pad_id: int) 
         shift_targets.reshape(-1),
         ignore_index=pad_id,
     )
+
+
+def evaluate(
+    model: torch.nn.Module,
+    val_dataloader: DataLoader,
+    pad_id: int,
+    device: torch.device,
+    autocast_dtype: torch.dtype | None,
+    use_amp: bool,
+) -> float:
+    was_training = model.training
+    model.eval()
+    losses = []
+    with torch.no_grad():
+        for batch in val_dataloader:
+            input_ids = batch.to(device, non_blocking=True)
+            with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_amp):
+                logits = model(input_ids)
+                losses.append(next_token_loss(logits, input_ids, pad_id).item())
+    model.train(was_training)
+    return sum(losses) / len(losses)
 
 
 def make_collate_fn(tokenizer: Tokenizer, max_seq_len: int) -> Callable[[list[dict]], torch.Tensor]:

@@ -1,9 +1,18 @@
+import math
+
 import pytest
 import torch
 
 from llmtrain.data.tokenizer import train_tokenizer
-from llmtrain.training.config import TrainConfig
-from llmtrain.training.train import get_lr, make_collate_fn, next_token_loss, select_device
+from llmtrain.model.transformer import TransformerLM
+from llmtrain.training.config import ModelConfig, TrainConfig
+from llmtrain.training.train import (
+    evaluate,
+    get_lr,
+    make_collate_fn,
+    next_token_loss,
+    select_device,
+)
 
 
 def test_select_device_returns_a_torch_device():
@@ -96,3 +105,47 @@ def test_clip_grad_norm_caps_gradient_norm_and_returns_pre_clip_norm():
     assert returned_norm.item() == pytest.approx(manual_norm.item(), rel=1e-4)
     post_clip_norm = torch.sqrt(sum((p.grad.detach() ** 2).sum() for p in model.parameters()))
     assert post_clip_norm.item() <= max_norm + 1e-4
+
+
+def test_evaluate_returns_finite_float_and_restores_train_mode():
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=2, n_kv_heads=1, dropout=0.0)
+    model = TransformerLM(config)
+    model.train()
+
+    # A plain list of batches stands in for a DataLoader here — evaluate() only ever
+    # does `for batch in val_dataloader:`, so any iterable of pre-batched tensors works,
+    # and this avoids pulling in real DataLoader/dataset machinery for a unit test.
+    batch = torch.randint(0, 16, (2, 6))
+    val_dataloader = [batch, batch]
+
+    val_loss = evaluate(
+        model,
+        val_dataloader,
+        pad_id=0,
+        device=torch.device("cpu"),
+        autocast_dtype=None,
+        use_amp=False,
+    )
+
+    assert math.isfinite(val_loss)
+    assert model.training is True
+
+
+def test_evaluate_restores_eval_mode_if_model_was_already_in_eval_mode():
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=2, n_kv_heads=1, dropout=0.0)
+    model = TransformerLM(config)
+    model.eval()
+
+    batch = torch.randint(0, 16, (2, 6))
+    val_dataloader = [batch]
+
+    evaluate(
+        model,
+        val_dataloader,
+        pad_id=0,
+        device=torch.device("cpu"),
+        autocast_dtype=None,
+        use_amp=False,
+    )
+
+    assert model.training is False
