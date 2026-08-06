@@ -55,3 +55,29 @@ def test_get_lr_clamps_to_min_lr_after_max_steps():
 def test_get_lr_with_zero_warmup_starts_at_max_lr():
     cfg = TrainConfig(lr=1.0, min_lr=0.1, warmup_steps=0, max_steps=100)
     assert get_lr(0, cfg) == pytest.approx(1.0)
+
+
+def test_gradient_accumulation_matches_full_batch_gradient():
+    torch.manual_seed(0)
+    model_full = torch.nn.Linear(4, 2)
+    model_accum = torch.nn.Linear(4, 2)
+    model_accum.load_state_dict(model_full.state_dict())
+
+    x = torch.randn(8, 4)
+    y = torch.randn(8, 2)
+
+    loss_full = torch.nn.functional.mse_loss(model_full(x), y)
+    loss_full.backward()
+
+    accumulation_steps = 4
+    micro_batch_size = 2
+    for i in range(accumulation_steps):
+        start, end = i * micro_batch_size, (i + 1) * micro_batch_size
+        micro_loss = (
+            torch.nn.functional.mse_loss(model_accum(x[start:end]), y[start:end])
+            / accumulation_steps
+        )
+        micro_loss.backward()
+
+    for p_full, p_accum in zip(model_full.parameters(), model_accum.parameters()):
+        assert torch.allclose(p_full.grad, p_accum.grad, atol=1e-5, rtol=1e-4)

@@ -133,6 +133,9 @@ def train(
     autocast_dtype = torch.bfloat16 if device.type == "cuda" else None
 
     model.train()
+    optimizer.zero_grad()
+    accumulated_loss = 0.0
+    micro_step = 0
     # A bare `for batch in dataloader` would stop as soon as the underlying stream is
     # exhausted, capping training at whatever step count one pass through the dataset
     # happens to reach — silently ignoring the rest of --max-steps. Wrapping in this
@@ -147,18 +150,28 @@ def train(
                 device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp
             ):
                 logits = model(input_ids)
-                loss = next_token_loss(logits, input_ids, pad_id)
+                loss = (
+                    next_token_loss(logits, input_ids, pad_id)
+                    / train_cfg.gradient_accumulation_steps
+                )
+
+            loss.backward()
+            accumulated_loss += loss.item()
+            micro_step += 1
+
+            if micro_step % train_cfg.gradient_accumulation_steps != 0:
+                continue
 
             lr = get_lr(step, train_cfg)
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
 
-            optimizer.zero_grad()
-            loss.backward()
             optimizer.step()
+            optimizer.zero_grad()
 
-            wandb.log({"loss": loss.item(), "lr": lr}, step=step)
+            wandb.log({"loss": accumulated_loss, "lr": lr}, step=step)
             logger.debug("step %d complete", step, extra={"step": step})
+            accumulated_loss = 0.0
 
             step += 1
             if step % train_cfg.checkpoint_interval == 0:
@@ -200,6 +213,11 @@ def main() -> None:
 
     parser.add_argument("--max-steps", type=int, default=TrainConfig.max_steps)
     parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=TrainConfig.gradient_accumulation_steps,
+    )
     parser.add_argument("--lr", type=float, default=TrainConfig.lr)
     parser.add_argument("--min-lr", type=float, default=TrainConfig.min_lr)
     parser.add_argument("--warmup-steps", type=int, default=TrainConfig.warmup_steps)
@@ -242,6 +260,7 @@ def main() -> None:
     )
     train_cfg = TrainConfig(
         batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         lr=args.lr,
         min_lr=args.min_lr,
         warmup_steps=args.warmup_steps,
