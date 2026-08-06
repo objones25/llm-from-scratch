@@ -4,19 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-A toy LLM built from scratch and trained on `HuggingFaceFW/fineweb-edu`, using Hugging Face `tokenizers` and PyTorch. Full-scale training runs on a rented RunPod A100 GPU; smoke tests run locally on a Mac (MPS) first. The walking-skeleton pipeline is implemented and its local smoke test has passed end-to-end — see `docs/superpowers/specs/2026-07-31-project-scaffold-design.md` for the original design and `docs/smoke-test.md` for how to re-run verification.
+A toy LLM built from scratch and trained on `HuggingFaceFW/fineweb-edu`, using Hugging Face `tokenizers` and PyTorch. Full-scale training runs on a rented RunPod A100 GPU; smoke tests run locally on a Mac (MPS) first. The walking-skeleton pipeline is implemented and its local smoke test passed end-to-end — see `docs/superpowers/specs/2026-07-31-project-scaffold-design.md` for the original design. (The smoke-test walkthrough doc was removed and hasn't been replaced yet — see Testing strategy below.)
 
 A Hugging Face token and a W&B API key are required (`HF_TOKEN`, `WANDB_API_KEY` in a git-ignored `.env`, loaded via `uv run --env-file .env ...`). Never commit either.
 
 ## Datasets and their roles
 
-| Dataset | Purpose |
-|---|---|
-| `Trelis/tiny-shakespeare` | Local smoke test (Mac/MPS) — fast, no GPU rental. Its text column is `Text` (capital T); `data/streaming.py` renames it to `text` via `DatasetSpec.text_column`. Only 472 train rows — enough for a short smoke test, not for `--resume` (see below). |
-| `reds0510/enwik8-processed` | 15-minute A100 smoke test — 1.1M rows, real-scale enough for `--resume` to behave correctly. |
-| `HuggingFaceFW/fineweb-edu` | Main pretraining corpus. `name="sample-100BT"`, `split="train"`, `streaming=True` — never download the full dataset. |
-| `HuggingFaceTB/smoltalk` | SFT (supervised fine-tuning) after pretraining. |
-| `HuggingFaceH4/no_robots` | Quick sanity checks (small, fast to iterate on). |
+| Dataset                     | Purpose                                                                                                                                                                                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Trelis/tiny-shakespeare`   | Local smoke test (Mac/MPS) — fast, no GPU rental. Its text column is `Text` (capital T); `data/streaming.py` renames it to `text` via `DatasetSpec.text_column`. Only 472 train rows — enough for a short smoke test, not for `--resume` (see below). |
+| `reds0510/enwik8-processed` | 15-minute A100 smoke test — 1.1M rows, real-scale enough for `--resume` to behave correctly.                                                                                                                                                          |
+| `HuggingFaceFW/fineweb-edu` | Main pretraining corpus. `name="sample-100BT"`, `split="train"`, `streaming=True` — never download the full dataset.                                                                                                                                  |
+| `HuggingFaceTB/smoltalk`    | SFT (supervised fine-tuning) after pretraining.                                                                                                                                                                                                       |
+| `HuggingFaceH4/no_robots`   | Quick sanity checks (small, fast to iterate on).                                                                                                                                                                                                      |
 
 `karpathy/tiny_shakespeare` and `google/reformer-enwik8` (the original picks) are dead on the Hub — script-only and deleted, respectively — hence the replacements above. Workflow order: tiny_shakespeare (local) → reformer-enwik8-processed (A100, ~15 min) → fineweb-edu pretraining (A100) → smoltalk SFT.
 
@@ -44,19 +44,22 @@ logging_config.py       # dictConfig: stdout + JSONL file handler
 python -m llmtrain.training.train --dataset <tiny_shakespeare|reformer_enwik8|fineweb_edu> \
     [--max-steps N] [--batch-size N] [--lr F] [--checkpoint-dir DIR] [--resume PATH]
 ```
-Same code path for local smoke tests, the A100 smoke test, and the real pretraining run — `--checkpoint-dir` is the only thing that needs to change for RunPod (point it at the mounted network volume). Every `DataConfig`/`ModelConfig`/`TrainConfig` field is exposed as a CLI flag (`--d-model`, `--n-layers`, `--n-kv-heads`, `--dropout`, `--rope-theta`, `--min-lr`, `--warmup-steps`, `--weight-decay`, `--beta1`/`--beta2`, `--seed`, `--compile`/`--no-compile`, `--use-amp`/`--no-use-amp`, `--wandb-project`, `--wandb-mode`, etc. — run `--help` for the full list); each flag's default reads from the corresponding dataclass field (e.g. `default=TrainConfig.checkpoint_interval`) rather than a duplicated literal, so the dataclasses are the single source of truth for defaults.
 
-`train.py`'s `get_lr(step, train_cfg)` is a linear-warmup-then-cosine-decay schedule (nanoGPT-style): ramps from 0 to `lr` over `warmup_steps`, cosine-decays to `min_lr` by `max_steps`, then holds at `min_lr`. It's a pure function of `step`, so `--resume` needs no separate scheduler state — the restored step counter alone determines the LR. The optimizer's `param_groups` are updated every step (before `optimizer.step()`), and the resulting LR is logged to W&B alongside loss.
+Same code path for local smoke tests, the A100 smoke test, and the real pretraining run — `--checkpoint-dir` is the only thing that needs to change for RunPod (point it at the mounted network volume). Every `DataConfig`/`ModelConfig`/`TrainConfig` field is exposed as a CLI flag (`--d-model`, `--n-layers`, `--n-kv-heads`, `--dropout`, `--rope-theta`, `--min-lr`, `--warmup-steps`, `--weight-decay`, `--beta1`/`--beta2`, `--gradient-accumulation-steps`, `--grad-clip`, `--seed`, `--compile`/`--no-compile`, `--use-amp`/`--no-use-amp`, `--wandb-project`, `--wandb-mode`, etc. — run `--help` for the full list); each flag's default reads from the corresponding dataclass field (e.g. `default=TrainConfig.checkpoint_interval`) rather than a duplicated literal, so the dataclasses are the single source of truth for defaults.
+
+`train.py`'s `get_lr(step, train_cfg)` is a linear-warmup-then-cosine-decay schedule (nanoGPT-style): ramps from 0 to `lr` over `warmup_steps`, cosine-decays to `min_lr` by `max_steps`, then holds at `min_lr`. It's a pure function of `step`, so `--resume` needs no separate scheduler state — the restored step counter alone determines the LR. The optimizer's `param_groups` are updated every step (before `optimizer.step()`), and the resulting LR is logged to W&B alongside loss. **`step` means an optimizer step, not a micro-batch forward/backward** — `train()` accumulates gradients over `TrainConfig.gradient_accumulation_steps` (default 8) micro-batches before each `optimizer.step()`/`step += 1`, so `--max-steps`, `checkpoint_interval`, and W&B's `step` axis all count optimizer steps; `--resume` always lands on a clean accumulation-window boundary, so no accumulation state needs to be persisted. Gradients are clipped (`torch.nn.utils.clip_grad_norm_`, `TrainConfig.grad_clip`, default 1.0) once per window, right before `optimizer.step()`; the pre-clip norm is logged to W&B as `grad_norm`. AdamW uses two param groups — `weight_decay` (default 0.1) applies only to parameters with `dim() >= 2`, excluding `nn.RMSNorm` gains (the only remaining 1-D params, since every `nn.Linear` layer is `bias=False`); `beta2` defaults to `0.95` (not PyTorch's `0.999`), matching GPT-3/LLaMA-style pretraining practice. `TransformerLM`'s weights use LLaMA-style init (`_init_weights`: `N(0, 0.02²)` for `nn.Linear`/`nn.Embedding`, with `attn.out_proj`/`mlp.w_down` additionally scaled by `1/√(2·n_layers)` since they write directly into the residual stream).
 
 Three more cheap, safe additions live in `train()`: `torch.set_float32_matmul_precision("high")` gated behind `device.type == "cuda"` (TF32 matmul speedup on Ampere+, no-op on MPS/CPU); `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set via `os.environ.setdefault` before any CUDA allocation (reduces fragmentation-driven OOMs on long runs); and `drop_last=True` on the `DataLoader` (keeps every batch shape constant so `torch.compile` never recompiles mid-run on a ragged final batch).
 
-Deferred (discussed, not implemented — revisit only if the problem they solve actually shows up): sequence packing (concat + chunk instead of pad — real throughput win, but needs reworking the tokenizer/collate pipeline, not a config tweak), gradient accumulation, DataLoader `num_workers`/`persistent_workers`/`prefetch_factor` tuning, fused cross-entropy, and gradient checkpointing — the last two solve memory pressure this config doesn't currently have.
+Deferred (discussed, not implemented — revisit only if the problem they solve actually shows up): sequence packing (concat + chunk instead of pad — real throughput win, but needs reworking the tokenizer/collate pipeline, not a config tweak), DataLoader `num_workers`/`persistent_workers`/`prefetch_factor` tuning, fused cross-entropy, and gradient checkpointing — the last two solve memory pressure this config doesn't currently have. A held-out validation loop is also not yet implemented (`train()` only ever logs train loss).
 
 A second CLI entry point, `generate.py`, runs inference from a trained checkpoint (greedy or temperature-sampled decoding, KV-cache-backed, with repetition penalty and top-k/top-p sampling):
+
 ```
 python -m llmtrain.generate --checkpoint <path/to/step_N.pt> [--tokenizer-path PATH] \
     --prompt "..." [--max-new-tokens N] [--temperature F] [--repetition-penalty F] [--top-k N] [--top-p F]
 ```
+
 `--tokenizer-path` defaults to `tokenizer.json` next to the checkpoint (saved alongside checkpoints by `train.py`). Sampling defaults live in `GenerationConfig` (`training/config.py`), shared as the single source of truth between the CLI flag defaults and the `generate()`/`generate_token_ids()` signatures (both take a `GenerationConfig` instead of five separate parameters). Model architecture is reconstructed from the `model_config` persisted in the checkpoint (falls back to `ModelConfig()` defaults for older checkpoints saved before that field existed).
 
 ## Device handling (MPS vs CUDA)
@@ -102,7 +105,7 @@ uv run --env-file .env wandb login --verify   # confirm W&B auth before a real r
 
 ## Testing strategy
 
-Everything except the GPU training loop itself gets a real, fast, CPU-only unit test with tiny fake data (no GPU, no network, no cost) — data loading, tokenizer, model forward/backward shapes, checkpoint round-trip (including dataset iterator state), config parsing. `train()`/`main()` orchestration has no automated test by design — it's validated by the manual smoke test in `docs/smoke-test.md`, which has passed end-to-end (50 steps, tiny_shakespeare, decreasing loss, valid checkpoint, valid JSONL log).
+Everything except the GPU training loop itself gets a real, fast, CPU-only unit test with tiny fake data (no GPU, no network, no cost) — data loading, tokenizer, model forward/backward shapes, checkpoint round-trip (including dataset iterator state), config parsing. `train()`/`main()` orchestration has no automated test by design — it was validated by an end-to-end manual smoke test (50 steps, tiny_shakespeare, decreasing loss, valid checkpoint, valid JSONL log) before the pretraining-loop-hardening changes (gradient accumulation, clipping, AdamW retune, weight init) landed. The walkthrough doc for that smoke test (`docs/smoke-test.md`) was deleted and hasn't been replaced yet — re-run a manual smoke test by hand (e.g. `uv run python -m llmtrain.training.train --dataset tiny_shakespeare --max-steps 4 --gradient-accumulation-steps 2 --batch-size 2 --checkpoint-interval 2 --wandb-mode disabled`) until a new doc exists.
 
 ## Development principles
 
