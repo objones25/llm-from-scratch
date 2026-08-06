@@ -162,6 +162,8 @@ def train(
             if micro_step % train_cfg.gradient_accumulation_steps != 0:
                 continue
 
+            total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
+
             lr = get_lr(step, train_cfg)
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
@@ -169,7 +171,9 @@ def train(
             optimizer.step()
             optimizer.zero_grad()
 
-            wandb.log({"loss": accumulated_loss, "lr": lr}, step=step)
+            wandb.log(
+                {"loss": accumulated_loss, "lr": lr, "grad_norm": total_norm.item()}, step=step
+            )
             logger.debug("step %d complete", step, extra={"step": step})
             accumulated_loss = 0.0
 
@@ -218,6 +222,7 @@ def main() -> None:
         type=int,
         default=TrainConfig.gradient_accumulation_steps,
     )
+    parser.add_argument("--grad-clip", type=float, default=TrainConfig.grad_clip)
     parser.add_argument("--lr", type=float, default=TrainConfig.lr)
     parser.add_argument("--min-lr", type=float, default=TrainConfig.min_lr)
     parser.add_argument("--warmup-steps", type=int, default=TrainConfig.warmup_steps)
@@ -261,6 +266,7 @@ def main() -> None:
     train_cfg = TrainConfig(
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        grad_clip=args.grad_clip,
         lr=args.lr,
         min_lr=args.min_lr,
         warmup_steps=args.warmup_steps,

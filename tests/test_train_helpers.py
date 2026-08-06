@@ -81,3 +81,18 @@ def test_gradient_accumulation_matches_full_batch_gradient():
 
     for p_full, p_accum in zip(model_full.parameters(), model_accum.parameters()):
         assert torch.allclose(p_full.grad, p_accum.grad, atol=1e-5, rtol=1e-4)
+
+
+def test_clip_grad_norm_caps_gradient_norm_and_returns_pre_clip_norm():
+    model = torch.nn.Linear(4, 2)
+    x = torch.randn(3, 4)
+    loss = (model(x) * 1000.0).sum()
+    loss.backward()
+
+    manual_norm = torch.sqrt(sum((p.grad.detach() ** 2).sum() for p in model.parameters()))
+    max_norm = 1.0
+    returned_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+    assert returned_norm.item() == pytest.approx(manual_norm.item(), rel=1e-4)
+    post_clip_norm = torch.sqrt(sum((p.grad.detach() ** 2).sum() for p in model.parameters()))
+    assert post_clip_norm.item() <= max_norm + 1e-4
