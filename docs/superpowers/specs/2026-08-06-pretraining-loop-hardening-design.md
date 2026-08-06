@@ -6,7 +6,7 @@ Date: 2026-08-06
 
 This is the "training-loop robustness" follow-on spec deferred by `2026-07-31-architecture-modernization-design.md` (LR schedule/weight decay/gradient accumulation). LR warmup+cosine decay already shipped separately (see git history); this spec covers what's left: gradient accumulation, gradient clipping, AdamW hyperparameter retuning, and weight initialization — the pieces standing between the current `train()` loop and a training recipe that behaves like real LLM pretraining, not just a working forward/backward loop.
 
-Second of three planned specs from the current brainstorming session (this one, then held-out validation loop, then fused cross-entropy — each independent, each getting its own spec).
+First of three planned specs from the current brainstorming session (this one, then held-out validation loop, then fused cross-entropy — each independent, each getting its own spec).
 
 **In scope:** `TrainConfig.gradient_accumulation_steps`, `TrainConfig.grad_clip`, `TrainConfig.beta2`/`weight_decay` retune, `TransformerLM._init_weights`, bias removal from all `nn.Linear` layers.
 

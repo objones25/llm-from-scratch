@@ -4,7 +4,7 @@ Date: 2026-08-06
 
 ## Scope
 
-Third of three specs from this session's brainstorming (after `2026-08-06-pretraining-loop-hardening-design.md`; fused cross-entropy is the remaining one). Closes the "no validation signal at all" gap flagged by this session's earlier audit — currently `train()` only ever logs train loss, so there's no way to notice overfitting or judge generalization during a long paid A100 run.
+Second of three specs from this session's brainstorming (after `2026-08-06-pretraining-loop-hardening-design.md`; fused cross-entropy is the remaining one). Closes the "no validation signal at all" gap flagged by this session's earlier audit — currently `train()` only ever logs train loss, so there's no way to notice overfitting or judge generalization during a long paid A100 run.
 
 **In scope:** `DatasetSpec`/`DATASET_REGISTRY` changes to declare a validation strategy per dataset, `load_streaming_dataset` → `load_streaming_datasets` (renamed, returns a train/val pair), a new `evaluate()` helper, and its integration into `train()`'s loop.
 
