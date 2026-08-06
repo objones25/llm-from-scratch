@@ -142,9 +142,11 @@ class TransformerLM(nn.Module):
         self.head.weight = self.token_emb.weight
         self.apply(_init_weights)
         residual_std = 0.02 / (2 * config.n_layers) ** 0.5
-        for block in self.blocks:
-            nn.init.normal_(block.attn.out_proj.weight, mean=0.0, std=residual_std)
-            nn.init.normal_(block.mlp.w_down.weight, mean=0.0, std=residual_std)
+        for module in self.modules():
+            if isinstance(module, CausalSelfAttention):
+                nn.init.normal_(module.out_proj.weight, mean=0.0, std=residual_std)
+            elif isinstance(module, MLP):
+                nn.init.normal_(module.w_down.weight, mean=0.0, std=residual_std)
 
     def forward(self, input_ids: torch.Tensor, cache: KVCache | None = None) -> torch.Tensor:
         x = self.token_emb(input_ids)

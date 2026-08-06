@@ -35,7 +35,7 @@ class TrainConfig:
     max_steps: int = 10000
     seed: int = 42
     checkpoint_dir: str = "checkpoints"
-    checkpoint_interval: int = 1000
+    checkpoint_interval: int = 125
     compile: bool = True
     use_amp: bool = True
     wandb_project: str = "llm-training"
