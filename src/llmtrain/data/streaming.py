@@ -10,15 +10,28 @@ class DatasetSpec:
     name: str | None
     split: str
     text_column: str = "text"
+    val_split: str | None = None
+    val_holdout_examples: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.val_split is None) == (self.val_holdout_examples is None):
+            raise ValueError("exactly one of val_split or val_holdout_examples must be set")
 
 
 DATASET_REGISTRY: dict[str, DatasetSpec] = {
     "tiny_shakespeare": DatasetSpec(
-        path="Trelis/tiny-shakespeare", name=None, split="train", text_column="Text"
+        path="Trelis/tiny-shakespeare",
+        name=None,
+        split="train",
+        text_column="Text",
+        val_split="test",
     ),
-    "reformer_enwik8": DatasetSpec(path="reds0510/enwik8-processed", name=None, split="train"),
+    "reformer_enwik8": DatasetSpec(path="reds0510/enwik8-processed", name=None, split="train", val_holdout_examples=1000),
     "fineweb_edu": DatasetSpec(
-        path="HuggingFaceFW/fineweb-edu", name="sample-100BT", split="train"
+        path="HuggingFaceFW/fineweb-edu",
+        name="sample-100BT",
+        split="train",
+        val_holdout_examples=1000,
     ),
 }
 
