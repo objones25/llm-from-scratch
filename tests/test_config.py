@@ -55,3 +55,8 @@ def test_train_config_uses_llm_pretraining_adamw_values():
     cfg = TrainConfig()
     assert cfg.beta2 == pytest.approx(0.95)
     assert cfg.weight_decay == pytest.approx(0.1)
+
+
+def test_train_config_has_eval_interval_default():
+    cfg = TrainConfig()
+    assert cfg.eval_interval > 0
