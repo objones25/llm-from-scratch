@@ -1,3 +1,5 @@
+import pytest
+
 from llmtrain.training.config import DataConfig, GenerationConfig, ModelConfig, TrainConfig
 
 
@@ -41,3 +43,15 @@ def test_generation_config_has_sensible_defaults():
     assert cfg.repetition_penalty >= 1.0
     assert cfg.top_k >= 0
     assert cfg.top_p > 0
+
+
+def test_train_config_has_gradient_accumulation_and_clip_defaults():
+    cfg = TrainConfig()
+    assert cfg.gradient_accumulation_steps >= 1
+    assert cfg.grad_clip > 0
+
+
+def test_train_config_uses_llm_pretraining_adamw_values():
+    cfg = TrainConfig()
+    assert cfg.beta2 == pytest.approx(0.95)
+    assert cfg.weight_decay == pytest.approx(0.1)

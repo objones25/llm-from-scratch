@@ -24,12 +24,14 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     batch_size: int = 32
+    gradient_accumulation_steps: int = 8
+    grad_clip: float = 1.0
     lr: float = 3e-4
     min_lr: float = 3e-5
     warmup_steps: int = 200
-    weight_decay: float = 0.01
+    weight_decay: float = 0.1
     beta1: float = 0.9
-    beta2: float = 0.999
+    beta2: float = 0.95
     max_steps: int = 10000
     seed: int = 42
     checkpoint_dir: str = "checkpoints"
