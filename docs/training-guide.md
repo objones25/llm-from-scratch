@@ -5,11 +5,40 @@ Mac, a real-scale smoke test on a rented A100, the actual `fineweb-edu` pretrain
 inference against a checkpoint with `generate.py`. See the repo root `README.md` for a
 project overview; this doc assumes you've already read that and just want to run things.
 
-Prerequisites for anything beyond `--wandb-mode disabled` local runs: a `.env` file at the
-repo root (git-ignored) with `HF_TOKEN` and `WANDB_API_KEY` set, and `uv sync` run once to
-install dependencies. Every command below is invoked as `uv run --env-file .env ...` so those
-variables are available to the process; see `CLAUDE.md` for why (`HF_TOKEN`/`WANDB_API_KEY`
-are required, never commit `.env`).
+## Setup
+
+This applies both on your Mac and on a rented pod — clone, install, configure:
+
+```bash
+git clone https://github.com/objones25/llm-from-scratch.git
+cd llm-from-scratch
+uv sync
+```
+
+`uv sync` reads `pyproject.toml`/`uv.lock` and creates a `.venv` with everything pinned there —
+no separate `pip install` step. On a CUDA machine (the A100 pod, not your Mac), also install
+the fused-cross-entropy dependency:
+
+```bash
+uv sync --extra cuda
+```
+
+Then create a `.env` file at the repo root (git-ignored — never commit it) with a Hugging
+Face token and a Weights & Biases API key:
+
+```dotenv
+HF_TOKEN=hf_...
+WANDB_API_KEY=...
+```
+
+Get `HF_TOKEN` from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+(a read-scoped token is sufficient — this project only reads public datasets, it never
+pushes anything to the Hub) and `WANDB_API_KEY` from
+[wandb.ai/authorize](https://wandb.ai/authorize). Every command in this guide that needs
+either variable is invoked as `uv run --env-file .env ...`; commands run with
+`--wandb-mode disabled` (the local smoke test in Part 1) don't strictly need `WANDB_API_KEY`,
+but `--env-file .env` is harmless to pass regardless, so the examples below use it
+consistently.
 
 ## Part 1 — Local smoke test (Mac, MPS/CPU)
 
@@ -101,23 +130,72 @@ correctly" — unlike `tiny_shakespeare`, whose 472 rows are smaller than the de
 buffer and make `--resume` silently train zero steps (see Part 5). This is the dataset to use
 to actually exercise `--resume` before trusting it on the real `fineweb_edu` run.
 
-### One-time setup on the pod
+### One-time RunPod account setup
 
-Pull these directly from `CLAUDE.md`'s RunPod workflow section — they're accurate and
-already carefully worded:
+**Add an SSH key to your RunPod account before deploying anything.** RunPod injects your
+public key into a pod's `~/.ssh/authorized_keys` automatically at launch, but only if the key
+was already on your account first — adding it after the pod is already running means either
+redeploying or pasting the key in manually. Generate one if you don't already have one you
+want to reuse, then add the public half at
+[runpod.io → Settings → SSH Public Keys](https://www.runpod.io/console/user/settings):
 
-- Rent **spot** instances — checkpoint-on-network-volume plus exact stream resume absorbs
-  interruption risk, and spot is meaningfully cheaper.
-- `--checkpoint-dir` points at a mounted **network volume** so checkpoints survive pod
-  stop/restart independent of the pod's own disk.
-- `pip install wandb && wandb login` once per pod; bake into a startup script/Dockerfile for
-  custom templates so it survives fresh containers.
-- `uv sync --extra cuda` once per pod to install `liger-kernel` — `TrainConfig.use_fused_ce`
-  defaults to `True`, so training will `ImportError` partway into a run (after tokenizer
-  training and dataset streaming) on a CUDA box that skips this step.
-- Launch training inside **tmux** (or `nohup ... &`) and disconnect — monitor via the W&B
-  dashboard, don't hold the SSH session open. No inbound port exposure is needed; W&B is
-  outbound-only.
+```bash
+ssh-keygen -t ed25519 -C "runpod" -f ~/.ssh/runpod_ed25519
+cat ~/.ssh/runpod_ed25519.pub   # paste this into the RunPod console
+```
+
+### Create a network volume
+
+Network volumes are **tied to a specific data center** — the pod you deploy has to land in
+that same data center to attach it, so create the volume first and pick the pod's data center
+to match, not the other way around:
+
+1. RunPod console → **Storage** → **New Network Volume**.
+2. Pick a data center, give it a name, and size it generously above what `--keep-last-n-checkpoints`
+   × ~1GB actually needs (see Part 3's cost-awareness note) — network volumes are billed for
+   their provisioned size regardless of how much is actually used, and resizing later means
+   picking a size you won't need to revisit mid-run.
+
+### Deploy the pod
+
+1. RunPod console → **Pods** → **Deploy**.
+2. Filter to GPU pods in the **same data center as your network volume**, select an A100.
+3. Choose a template with PyTorch/CUDA preinstalled (e.g. an official "RunPod PyTorch" image)
+   — this project needs Python 3.12+ and a working CUDA toolchain, but installs everything
+   else itself via `uv sync`, so the exact template matters less than getting the data center
+   and GPU type right.
+4. Attach the network volume you created above, and note its mount path (commonly
+   `/workspace`) — that's what `--checkpoint-dir` points at below.
+5. Choose **Spot** over On-Demand where available — checkpoint-on-network-volume plus this
+   project's exact stream resume (`--resume`) absorbs interruption risk, and spot is
+   meaningfully cheaper for a workload that can tolerate being preempted and resumed.
+6. Deploy, wait for the pod to report Running, then connect:
+
+   ```bash
+   ssh root@<pod-ip> -p <ssh-port> -i ~/.ssh/runpod_ed25519
+   ```
+
+   (Find `<pod-ip>`/`<ssh-port>` on the pod's detail page, or via `runpodctl ssh info <pod-id>`
+   if you have `runpodctl` installed locally.)
+
+### On the pod
+
+Once connected over SSH, follow this guide's [Setup](#setup) section above to clone the repo
+and run `uv sync` — same steps as local, on the pod's own disk (not the network volume; the
+network volume is for checkpoints via `--checkpoint-dir`, not the code checkout). Then,
+pod-specific additions:
+
+- `uv sync --extra cuda` (not needed on your Mac, required here) installs `liger-kernel` —
+  `TrainConfig.use_fused_ce` defaults to `True`, so training will `ImportError` partway into a
+  run (after tokenizer training and dataset streaming, not immediately) on a CUDA box that
+  skips this step.
+- `pip install wandb && wandb login` (or `uv run --env-file .env wandb login --verify` if
+  `.env` is already set up) — confirm W&B auth works before starting a real run. If you're
+  scripting pod setup (a startup script or custom template), bake this in so it survives fresh
+  containers.
+- Launch training inside **tmux** (or `nohup ... &`) and disconnect — monitor progress via the
+  W&B dashboard rather than holding the SSH session open. No inbound port exposure is needed;
+  W&B is outbound-only.
 
 ### Running the smoke test
 
@@ -198,7 +276,7 @@ cap.
 
 ## Part 4 — `generate.py` in depth
 
-```
+```text
 python -m llmtrain.generate --checkpoint <path/to/step_N.pt> [--tokenizer-path PATH] \
     --prompt "..." [--max-new-tokens N] [--temperature F] [--repetition-penalty F] \
     [--top-k N] [--top-p F]
@@ -250,6 +328,7 @@ examples. This is a property of `.shuffle()` itself, confirmed by isolating `.sk
 round-trips exactly on its own) from `.shuffle()` (which loses `buffer_size` examples on its
 own) in `tests/test_streaming.py::test_shuffled_skip_dataset_resumes_correctly_via_state_dict`
 (marked `xfail`, not fixed). The practical impact differs by dataset:
+
 - On `tiny_shakespeare` (472 rows, smaller than the 1000-row default shuffle buffer): the
   resumed stream comes up **completely empty**, and the run silently trains zero steps with
   no error raised. Not worth fixing for a dataset that only exists for a few-second local
@@ -289,7 +368,8 @@ default reads from `DataConfig`/`ModelConfig`/`TrainConfig`/`GenerationConfig` i
 current defaults rather than trusting this list to stay in sync):
 
 `train.py`:
-```
+
+```text
 --dataset {tiny_shakespeare,reformer_enwik8,fineweb_edu}
 --shuffle-buffer-size, --max-seq-len, --tokenizer-vocab-size, --tokenizer-sample-size
 --d-model, --n-layers, --n-heads, --n-kv-heads, --dropout, --rope-theta
@@ -301,7 +381,8 @@ current defaults rather than trusting this list to stay in sync):
 ```
 
 `generate.py`:
-```
+
+```text
 --checkpoint (required), --tokenizer-path, --prompt (required)
 --max-new-tokens, --temperature, --repetition-penalty, --top-k, --top-p
 ```

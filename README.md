@@ -47,6 +47,8 @@ At the default config (`d_model=768`, `n_layers=12`, `n_heads=12`, `n_kv_heads=4
 ## Installation
 
 ```bash
+git clone https://github.com/objones25/llm-from-scratch.git
+cd llm-from-scratch
 uv sync
 ```
 
@@ -63,7 +65,7 @@ Training needs a Hugging Face token (to pull the gated/rate-limited datasets) an
 Weights & Biases API key (for metrics logging). Put both in a git-ignored `.env` file at the
 repo root:
 
-```
+```dotenv
 HF_TOKEN=hf_...
 WANDB_API_KEY=...
 ```
@@ -112,7 +114,7 @@ Workflow order: `tiny_shakespeare` (local) -> `reformer_enwik8` (A100, ~15 min) 
 
 ## Repository structure
 
-```
+```text
 src/llmtrain/
   data/streaming.py     DATASET_REGISTRY (dataset path/split/text-column config) + load_streaming_datasets
   data/tokenizer.py      Byte-level BPE training (train_tokenizer) and batch encode/pad (encode_batch)
@@ -129,7 +131,7 @@ Full CLI reference for both entry points below (or run either with `--help`).
 
 **`train.py`**:
 
-```
+```text
 python -m llmtrain.training.train --dataset {tiny_shakespeare,reformer_enwik8,fineweb_edu}
     [--shuffle-buffer-size N] [--max-seq-len N] [--tokenizer-vocab-size N] [--tokenizer-sample-size N]
     [--d-model N] [--n-layers N] [--n-heads N] [--n-kv-heads N] [--dropout F] [--rope-theta F]
@@ -142,7 +144,7 @@ python -m llmtrain.training.train --dataset {tiny_shakespeare,reformer_enwik8,fi
 
 **`generate.py`**:
 
-```
+```text
 python -m llmtrain.generate --checkpoint PATH --prompt "..." [--tokenizer-path PATH]
     [--max-new-tokens N] [--temperature F] [--repetition-penalty F] [--top-k N] [--top-p F]
 ```
