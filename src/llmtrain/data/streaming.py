@@ -36,14 +36,24 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
 }
 
 
-def load_streaming_dataset(
+def load_streaming_datasets(
     dataset_name: str,
     seed: int,
     buffer_size: int,
     load_fn: Callable[..., IterableDataset] = load_dataset,
-) -> IterableDataset:
+) -> tuple[IterableDataset, IterableDataset]:
     spec = DATASET_REGISTRY[dataset_name]
     dataset = load_fn(spec.path, name=spec.name, split=spec.split, streaming=True)
     if spec.text_column != "text":
         dataset = dataset.rename_column(spec.text_column, "text")
-    return dataset.shuffle(seed=seed, buffer_size=buffer_size)
+    shuffled = dataset.shuffle(seed=seed, buffer_size=buffer_size)
+
+    if spec.val_split is not None:
+        val_dataset = load_fn(spec.path, name=spec.name, split=spec.val_split, streaming=True)
+        if spec.text_column != "text":
+            val_dataset = val_dataset.rename_column(spec.text_column, "text")
+        return shuffled, val_dataset
+
+    val_dataset = shuffled.take(spec.val_holdout_examples)
+    train_dataset = shuffled.skip(spec.val_holdout_examples)
+    return train_dataset, val_dataset

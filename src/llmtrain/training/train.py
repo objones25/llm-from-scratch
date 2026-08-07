@@ -12,7 +12,7 @@ from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from llmtrain.data.streaming import load_streaming_dataset
+from llmtrain.data.streaming import load_streaming_datasets
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
 from llmtrain.model.transformer import TransformerLM
@@ -95,10 +95,12 @@ def train(
         # loss for a model already training under bf16 autocast; no effect on MPS/CPU.
         torch.set_float32_matmul_precision("high")
 
-    dataset = load_streaming_dataset(
+    train_dataset, val_dataset = load_streaming_datasets(
         data_cfg.dataset_name, seed=train_cfg.seed, buffer_size=data_cfg.shuffle_buffer_size
     )
-    sample_texts = [example["text"] for example in dataset.take(data_cfg.tokenizer_sample_size)]
+    sample_texts = [
+        example["text"] for example in train_dataset.take(data_cfg.tokenizer_sample_size)
+    ]
     tokenizer = train_tokenizer(sample_texts, vocab_size=data_cfg.tokenizer_vocab_size)
     model_cfg.vocab_size = tokenizer.get_vocab_size()
 
@@ -127,15 +129,22 @@ def train(
         # rebuilds the model from scratch at inference time.
         step, dataset_state, _resumed_model_config = load_checkpoint(resume_path, model, optimizer)
         if dataset_state is not None:
-            dataset.load_state_dict(dataset_state)
+            train_dataset.load_state_dict(dataset_state)
         logger.info("resumed from checkpoint at step %d", step, extra={"step": step})
 
     dataloader = DataLoader(
-        dataset,  # type: ignore[arg-type]  # IterableDataset isn't in DataLoader's stub overloads, but is supported at runtime
+        train_dataset,  # type: ignore[arg-type]  # IterableDataset isn't in DataLoader's stub overloads, but is supported at runtime
         batch_size=train_cfg.batch_size,
         pin_memory=True,
         # A ragged final batch would force torch.compile to recompile for the new shape,
         # spiking memory mid-run; dropping it keeps every batch's shape constant.
+        drop_last=True,
+        collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len),
+    )
+    val_dataloader = DataLoader(
+        val_dataset,  # type: ignore[arg-type]  # IterableDataset isn't in DataLoader's stub overloads, but is supported at runtime
+        batch_size=train_cfg.batch_size,
+        pin_memory=True,
         drop_last=True,
         collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len),
     )
@@ -211,9 +220,20 @@ def train(
                     model,
                     optimizer,
                     step=step,
-                    dataset_state=dataset.state_dict(),
+                    dataset_state=train_dataset.state_dict(),
                 )
                 logger.info("saved checkpoint at step %d", step, extra={"step": step})
+            if step % train_cfg.eval_interval == 0:
+                val_loss = evaluate(
+                    model, val_dataloader, pad_id, device, autocast_dtype, train_cfg.use_amp
+                )
+                wandb.log({"val_loss": val_loss}, step=step)
+                logger.info(
+                    "val_loss %.4f at step %d",
+                    val_loss,
+                    step,
+                    extra={"step": step, "val_loss": val_loss},
+                )
             if step >= train_cfg.max_steps:
                 break
 
@@ -259,6 +279,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     parser.add_argument("--checkpoint-dir", type=str, default=TrainConfig.checkpoint_dir)
     parser.add_argument("--checkpoint-interval", type=int, default=TrainConfig.checkpoint_interval)
+    parser.add_argument("--eval-interval", type=int, default=TrainConfig.eval_interval)
     parser.add_argument(
         "--compile", action=argparse.BooleanOptionalAction, default=TrainConfig.compile
     )
@@ -304,6 +325,7 @@ def main() -> None:
         seed=args.seed,
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_interval=args.checkpoint_interval,
+        eval_interval=args.eval_interval,
         compile=args.compile,
         use_amp=args.use_amp,
         wandb_project=args.wandb_project,
