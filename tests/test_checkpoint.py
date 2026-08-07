@@ -5,8 +5,38 @@ from datasets import Dataset
 from torch import nn
 
 from llmtrain.model.transformer import TransformerLM
-from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
+from llmtrain.training.checkpoint import load_checkpoint, prune_old_checkpoints, save_checkpoint
 from llmtrain.training.config import ModelConfig
+
+
+def test_prune_old_checkpoints_keeps_only_the_most_recent_n(tmp_path):
+    for step in [10, 20, 30, 40, 50]:
+        (tmp_path / f"step_{step}.pt").write_bytes(b"")
+
+    prune_old_checkpoints(tmp_path, keep_last_n=3)
+
+    remaining = sorted(p.name for p in tmp_path.glob("step_*.pt"))
+    assert remaining == ["step_30.pt", "step_40.pt", "step_50.pt"]
+
+
+def test_prune_old_checkpoints_disabled_when_keep_last_n_is_zero_or_negative(tmp_path):
+    for step in [10, 20, 30]:
+        (tmp_path / f"step_{step}.pt").write_bytes(b"")
+
+    prune_old_checkpoints(tmp_path, keep_last_n=0)
+
+    remaining = sorted(p.name for p in tmp_path.glob("step_*.pt"))
+    assert remaining == ["step_10.pt", "step_20.pt", "step_30.pt"]
+
+
+def test_prune_old_checkpoints_is_noop_when_fewer_checkpoints_than_keep_last_n(tmp_path):
+    for step in [10, 20]:
+        (tmp_path / f"step_{step}.pt").write_bytes(b"")
+
+    prune_old_checkpoints(tmp_path, keep_last_n=5)
+
+    remaining = sorted(p.name for p in tmp_path.glob("step_*.pt"))
+    assert remaining == ["step_10.pt", "step_20.pt"]
 
 
 def test_checkpoint_round_trip_restores_model_and_optimizer(tmp_path):

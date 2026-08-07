@@ -16,7 +16,7 @@ from llmtrain.data.streaming import load_streaming_datasets
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
 from llmtrain.model.transformer import TransformerLM
-from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
+from llmtrain.training.checkpoint import load_checkpoint, prune_old_checkpoints, save_checkpoint
 from llmtrain.training.config import DataConfig, ModelConfig, TrainConfig
 
 logger = logging.getLogger(__name__)
@@ -256,6 +256,7 @@ def train(
                     step=step,
                     dataset_state=train_dataset.state_dict(),
                 )
+                prune_old_checkpoints(checkpoint_dir, train_cfg.keep_last_n_checkpoints)
                 logger.info("saved checkpoint at step %d", step, extra={"step": step})
             if step % train_cfg.eval_interval == 0:
                 val_loss = evaluate(
@@ -319,6 +320,9 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     parser.add_argument("--checkpoint-dir", type=str, default=TrainConfig.checkpoint_dir)
     parser.add_argument("--checkpoint-interval", type=int, default=TrainConfig.checkpoint_interval)
+    parser.add_argument(
+        "--keep-last-n-checkpoints", type=int, default=TrainConfig.keep_last_n_checkpoints
+    )
     parser.add_argument("--eval-interval", type=int, default=TrainConfig.eval_interval)
     parser.add_argument(
         "--compile", action=argparse.BooleanOptionalAction, default=TrainConfig.compile
@@ -370,6 +374,7 @@ def main() -> None:
         seed=args.seed,
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_interval=args.checkpoint_interval,
+        keep_last_n_checkpoints=args.keep_last_n_checkpoints,
         eval_interval=args.eval_interval,
         compile=args.compile,
         use_amp=args.use_amp,

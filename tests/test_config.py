@@ -65,3 +65,8 @@ def test_train_config_has_eval_interval_default():
 def test_train_config_defaults_to_fused_cross_entropy():
     cfg = TrainConfig()
     assert cfg.use_fused_ce is True
+
+
+def test_train_config_has_keep_last_n_checkpoints_default():
+    cfg = TrainConfig()
+    assert cfg.keep_last_n_checkpoints > 0

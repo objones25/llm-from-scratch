@@ -27,6 +27,17 @@ def save_checkpoint(
     )
 
 
+def prune_old_checkpoints(checkpoint_dir: str | Path, keep_last_n: int) -> None:
+    if keep_last_n <= 0:
+        return
+    checkpoints = sorted(
+        Path(checkpoint_dir).glob("step_*.pt"),
+        key=lambda p: int(p.stem.removeprefix("step_")),
+    )
+    for old_checkpoint in checkpoints[:-keep_last_n]:
+        old_checkpoint.unlink()
+
+
 def load_checkpoint(
     path: str | Path,
     model: nn.Module,
