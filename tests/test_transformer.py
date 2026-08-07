@@ -203,3 +203,14 @@ def test_residual_projections_are_scaled_down_from_plain_init():
     assert w_down_std == pytest.approx(expected_std, rel=0.4)
     assert out_proj_std < 0.02
     assert w_down_std < 0.02
+
+
+def test_return_hidden_is_mathematically_inert():
+    model = TransformerLM(_tiny_config())
+    model.eval()
+    input_ids = torch.randint(0, 16, (2, 6))
+    with torch.no_grad():
+        logits = model(input_ids)
+        hidden = model(input_ids, return_hidden=True)
+        logits_from_hidden = model.head(hidden)
+    assert torch.allclose(logits, logits_from_hidden, atol=1e-6)

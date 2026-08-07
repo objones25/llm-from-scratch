@@ -148,12 +148,19 @@ class TransformerLM(nn.Module):
             elif isinstance(module, MLP):
                 nn.init.normal_(module.w_down.weight, mean=0.0, std=residual_std)
 
-    def forward(self, input_ids: torch.Tensor, cache: KVCache | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        cache: KVCache | None = None,
+        return_hidden: bool = False,
+    ) -> torch.Tensor:
         x = self.token_emb(input_ids)
         position_offset = cache.seq_len if cache is not None else 0
         for layer_idx, block in enumerate(self.blocks):
             x = block(x, position_offset=position_offset, cache=cache, layer_idx=layer_idx)
         x = self.ln_f(x)
+        if return_hidden:
+            return x
         return self.head(x)
 
 
