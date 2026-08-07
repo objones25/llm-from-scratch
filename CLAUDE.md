@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-A toy LLM built from scratch and trained on `HuggingFaceFW/fineweb-edu`, using Hugging Face `tokenizers` and PyTorch. Full-scale training runs on a rented RunPod A100 GPU; smoke tests run locally on a Mac (MPS) first. The walking-skeleton pipeline is implemented and its local smoke test passed end-to-end — see `docs/superpowers/specs/2026-07-31-project-scaffold-design.md` for the original design. (The smoke-test walkthrough doc was removed and hasn't been replaced yet — see Testing strategy below.)
+A toy LLM built from scratch and trained on `HuggingFaceFW/fineweb-edu`, using Hugging Face `tokenizers` and PyTorch. Full-scale training runs on a rented RunPod A100 GPU; smoke tests run locally on a Mac (MPS) first. The walking-skeleton pipeline is implemented and its local smoke test passed end-to-end — see `docs/superpowers/specs/2026-07-31-project-scaffold-design.md` for the original design, `README.md` for a project overview, and `docs/training-guide.md` for the full walkthrough (local smoke test, A100 smoke test, the real pretraining run, and troubleshooting).
 
 A Hugging Face token and a W&B API key are required (`HF_TOKEN`, `WANDB_API_KEY` in a git-ignored `.env`, loaded via `uv run --env-file .env ...`). Never commit either.
 
@@ -120,7 +120,7 @@ uv run --env-file .env wandb login --verify   # confirm W&B auth before a real r
 
 ## Testing strategy
 
-Everything except the GPU training loop itself gets a real, fast, CPU-only unit test with tiny fake data (no GPU, no network, no cost) — data loading, tokenizer, model forward/backward shapes, checkpoint round-trip (including dataset iterator state), config parsing. `train()`/`main()` orchestration has no automated test by design — it was validated by an end-to-end manual smoke test (50 steps, tiny_shakespeare, decreasing loss, valid checkpoint, valid JSONL log) before the pretraining-loop-hardening changes (gradient accumulation, clipping, AdamW retune, weight init) landed. The walkthrough doc for that smoke test (`docs/smoke-test.md`) was deleted and hasn't been replaced yet — re-run a manual smoke test by hand (e.g. `uv run python -m llmtrain.training.train --dataset tiny_shakespeare --max-steps 4 --gradient-accumulation-steps 2 --batch-size 2 --checkpoint-interval 2 --wandb-mode disabled`) until a new doc exists.
+Everything except the GPU training loop itself gets a real, fast, CPU-only unit test with tiny fake data (no GPU, no network, no cost) — data loading, tokenizer, model forward/backward shapes, checkpoint round-trip (including dataset iterator state), config parsing. `train()`/`main()` orchestration has no automated test by design — it's validated by the manual smoke test documented in `docs/training-guide.md` (Part 1), most recently re-run end-to-end after the checkpoint/optimizer, checkpoint-pruning, and `model.compile()` fixes (30 steps, tiny_shakespeare, decreasing `val_loss`, valid pruned checkpoints, successful `generate.py` load).
 
 ## Development principles
 
