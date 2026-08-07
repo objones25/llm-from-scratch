@@ -7,6 +7,7 @@ from llmtrain.data.tokenizer import train_tokenizer
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.config import ModelConfig, TrainConfig
 from llmtrain.training.train import (
+    compute_loss,
     evaluate,
     get_lr,
     make_collate_fn,
@@ -149,3 +150,17 @@ def test_evaluate_restores_eval_mode_if_model_was_already_in_eval_mode():
     )
 
     assert model.training is False
+
+
+def test_compute_loss_non_fused_matches_direct_next_token_loss():
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=2, n_kv_heads=1, dropout=0.0)
+    model = TransformerLM(config)
+    model.eval()
+    input_ids = torch.randint(0, 16, (2, 6))
+
+    with torch.no_grad():
+        loss_via_compute_loss = compute_loss(model, input_ids, pad_id=0, use_fused_ce=False)
+        logits = model(input_ids)
+        loss_direct = next_token_loss(logits, input_ids, pad_id=0)
+
+    assert torch.allclose(loss_via_compute_loss, loss_direct, atol=1e-6)

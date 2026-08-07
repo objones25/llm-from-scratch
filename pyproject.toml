@@ -10,6 +10,9 @@ dependencies = [
     "wandb>=0.18",
 ]
 
+[project.optional-dependencies]
+cuda = ["liger-kernel"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.1.1,<9",

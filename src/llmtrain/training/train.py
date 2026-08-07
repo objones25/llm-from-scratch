@@ -7,11 +7,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-import wandb
 from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
+import wandb
 from llmtrain.data.streaming import load_streaming_datasets
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
@@ -34,6 +34,28 @@ def next_token_loss(logits: torch.Tensor, input_ids: torch.Tensor, pad_id: int) 
         shift_targets.reshape(-1),
         ignore_index=pad_id,
     )
+
+
+def next_token_loss_fused(
+    hidden: torch.Tensor, head_weight: torch.Tensor, input_ids: torch.Tensor, pad_id: int
+) -> torch.Tensor:
+    from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
+
+    shift_hidden = hidden[:, :-1, :].reshape(-1, hidden.size(-1))
+    shift_targets = input_ids[:, 1:].reshape(-1)
+    loss_fn = LigerFusedLinearCrossEntropyLoss(ignore_index=pad_id)
+    return loss_fn(head_weight, shift_hidden, shift_targets)
+
+
+def compute_loss(
+    model: torch.nn.Module, input_ids: torch.Tensor, pad_id: int, use_fused_ce: bool
+) -> torch.Tensor:
+    if use_fused_ce:
+        hidden = model(input_ids, return_hidden=True)  # type: ignore[misc]
+        head_weight = model.token_emb.weight  # type: ignore[union-attr,attr-defined]
+        return next_token_loss_fused(hidden, head_weight, input_ids, pad_id)  # type: ignore[arg-type]
+    logits = model(input_ids)
+    return next_token_loss(logits, input_ids, pad_id)
 
 
 def evaluate(
