@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cuda = ["liger-kernel"]
+cuda = ["liger-kernel>=0.8"]
 
 [dependency-groups]
 dev = [
