@@ -39,7 +39,13 @@ model/transformer.py  # TransformerLM: RoPE, RMSNorm, SwiGLU MLP, weight-tied em
 model/cache.py         # KVCache: per-layer (k, v) tensor cache, update() concatenates along seq dim
 training/config.py    # DataConfig/ModelConfig/TrainConfig/GenerationConfig dataclasses, no YAML layer
 training/train.py      # select_device, next_token_loss, make_collate_fn, train(), main() — the training entry point
-training/checkpoint.py # saves/loads model + optimizer + dataset iterator state + model architecture config as one unit
+training/checkpoint.py # saves/loads model + optimizer + dataset iterator state + model architecture config as one unit;
+                       # optimizer is optional on load (inference callers pass none — no reason for
+                       # generate.py to be coupled to train()'s optimizer shape, e.g. its param-group
+                       # structure) and prune_old_checkpoints() keeps only the N most recent step_*.pt
+                       # files (TrainConfig.keep_last_n_checkpoints, default 3) — checkpoints are ~1GB
+                       # each at the real fineweb_edu-scale config, so unbounded accumulation over a
+                       # long run is a real network-volume storage cost, not just a tidiness concern
 generate.py             # KV-cache-backed text generation from a checkpoint; main() is a second CLI entry point
 logging_config.py       # dictConfig: stdout + JSONL file handler
 ```
@@ -49,7 +55,7 @@ python -m llmtrain.training.train --dataset <tiny_shakespeare|reformer_enwik8|fi
     [--max-steps N] [--batch-size N] [--lr F] [--checkpoint-dir DIR] [--resume PATH]
 ```
 
-Same code path for local smoke tests, the A100 smoke test, and the real pretraining run — `--checkpoint-dir` is the only thing that needs to change for RunPod (point it at the mounted network volume). Every `DataConfig`/`ModelConfig`/`TrainConfig` field is exposed as a CLI flag (`--d-model`, `--n-layers`, `--n-kv-heads`, `--dropout`, `--rope-theta`, `--min-lr`, `--warmup-steps`, `--weight-decay`, `--beta1`/`--beta2`, `--gradient-accumulation-steps`, `--grad-clip`, `--seed`, `--eval-interval`, `--compile`/`--no-compile`, `--use-amp`/`--no-use-amp`, `--wandb-project`, `--wandb-mode`, etc. — run `--help` for the full list); each flag's default reads from the corresponding dataclass field (e.g. `default=TrainConfig.checkpoint_interval`) rather than a duplicated literal, so the dataclasses are the single source of truth for defaults.
+Same code path for local smoke tests, the A100 smoke test, and the real pretraining run — `--checkpoint-dir` is the only thing that needs to change for RunPod (point it at the mounted network volume). Every `DataConfig`/`ModelConfig`/`TrainConfig` field is exposed as a CLI flag (`--d-model`, `--n-layers`, `--n-kv-heads`, `--dropout`, `--rope-theta`, `--min-lr`, `--warmup-steps`, `--weight-decay`, `--beta1`/`--beta2`, `--gradient-accumulation-steps`, `--grad-clip`, `--seed`, `--eval-interval`, `--keep-last-n-checkpoints`, `--compile`/`--no-compile`, `--use-amp`/`--no-use-amp`, `--use-fused-ce`/`--no-use-fused-ce`, `--wandb-project`, `--wandb-mode`, etc. — run `--help` for the full list); each flag's default reads from the corresponding dataclass field (e.g. `default=TrainConfig.checkpoint_interval`) rather than a duplicated literal, so the dataclasses are the single source of truth for defaults.
 
 `train.py`'s `get_lr(step, train_cfg)` is a linear-warmup-then-cosine-decay schedule (nanoGPT-style): ramps from 0 to `lr` over `warmup_steps`, cosine-decays to `min_lr` by `max_steps`, then holds at `min_lr`. It's a pure function of `step`, so `--resume` needs no separate scheduler state — the restored step counter alone determines the LR. The optimizer's `param_groups` are updated every step (before `optimizer.step()`), and the resulting LR is logged to W&B alongside loss. **`step` means an optimizer step, not a micro-batch forward/backward** — `train()` accumulates gradients over `TrainConfig.gradient_accumulation_steps` (default 8) micro-batches before each `optimizer.step()`/`step += 1`, so `--max-steps`, `checkpoint_interval`, and W&B's `step` axis all count optimizer steps; `--resume` always lands on a clean accumulation-window boundary, so no accumulation state needs to be persisted. Gradients are clipped (`torch.nn.utils.clip_grad_norm_`, `TrainConfig.grad_clip`, default 1.0) once per window, right before `optimizer.step()`; the pre-clip norm is logged to W&B as `grad_norm`. AdamW uses two param groups — `weight_decay` (default 0.1) applies only to parameters with `dim() >= 2`, excluding `nn.RMSNorm` gains (the only remaining 1-D params, since every `nn.Linear` layer is `bias=False`); `beta2` defaults to `0.95` (not PyTorch's `0.999`), matching GPT-3/LLaMA-style pretraining practice. `TransformerLM`'s weights use LLaMA-style init (`_init_weights`: `N(0, 0.02²)` for `nn.Linear`/`nn.Embedding`, with `attn.out_proj`/`mlp.w_down` additionally scaled by `1/√(2·n_layers)` since they write directly into the residual stream).
 
@@ -78,7 +84,7 @@ Verified against current PyTorch docs — don't assume from general knowledge, b
 - Always pass `pin_memory=True` to `DataLoader` — PyTorch itself forces it off on MPS (with a warning), so no branching is needed.
 - Gate `torch.compile` behind `device.type == "cuda"`. The MPS inductor backend is an explicit prototype, limited to elementwise ops and excluded from fusion optimization — don't use it on Mac.
 - `torch.autocast(device_type=device.type, dtype=..., ...)`: `bfloat16` on CUDA (A100 supports it natively, no `GradScaler` needed); default dtype (`float16`) on MPS/CPU.
-- `model` in `train()` is explicitly annotated `torch.nn.Module` — needed because `torch.compile`'s return type is a broad callable in the stubs, and without the annotation type checkers widen every later use of `model` to a union.
+- `model` in `train()` is explicitly annotated `torch.nn.Module` for consistency with `compute_loss()`/`evaluate()`'s parameter type. `train()` calls `model.compile()` (in-place, the current PyTorch-recommended pattern over functional `torch.compile(model)` wrapping) rather than reassigning `model` — no `OptimizedModule` wrapper is ever created, so there's no `_orig_mod.`-prefixed `state_dict()` key concern for `generate.py` (which always loads checkpoints into a fresh, uncompiled model) to worry about.
 
 ## Dataset streaming & resume
 
