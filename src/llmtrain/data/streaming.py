@@ -66,6 +66,9 @@ def load_streaming_datasets(
     # by construction. val_holdout_examples is always small (<=1000 by registry
     # default), so materializing is cheap, and it also avoids re-streaming the val set
     # from the network on every evaluate() call.
-    val_dataset = shuffled.take(spec.val_holdout_examples)
-    train_dataset = shuffled.skip(spec.val_holdout_examples)
+    # val_holdout_examples is guaranteed non-None here by __post_init__'s mutual-exclusivity
+    # check (this branch is only reached when val_split is None), but that's a runtime
+    # invariant type checkers can't see across the two fields.
+    val_dataset = shuffled.take(spec.val_holdout_examples)  # type: ignore[arg-type]
+    train_dataset = shuffled.skip(spec.val_holdout_examples)  # type: ignore[arg-type]
     return train_dataset, list(val_dataset)

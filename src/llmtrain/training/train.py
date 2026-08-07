@@ -7,11 +7,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-import wandb
 from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
+import wandb
 from llmtrain.data.streaming import load_streaming_datasets
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
@@ -37,9 +37,14 @@ def next_token_loss(logits: torch.Tensor, input_ids: torch.Tensor, pad_id: int) 
 
 
 def next_token_loss_fused(
-    hidden: torch.Tensor, head_weight: torch.Tensor, input_ids: torch.Tensor, pad_id: int
+    hidden: torch.Tensor,
+    head_weight: torch.Tensor,
+    input_ids: torch.Tensor,
+    pad_id: int,
 ) -> torch.Tensor:
-    from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
+    from liger_kernel.transformers import (  # type: ignore[import-not-found]
+        LigerFusedLinearCrossEntropyLoss,
+    )
 
     shift_hidden = hidden[:, :-1, :].reshape(-1, hidden.size(-1))
     shift_targets = input_ids[:, 1:].reshape(-1)
@@ -118,7 +123,9 @@ def train(
         torch.set_float32_matmul_precision("high")
 
     train_dataset, val_dataset = load_streaming_datasets(
-        data_cfg.dataset_name, seed=train_cfg.seed, buffer_size=data_cfg.shuffle_buffer_size
+        data_cfg.dataset_name,
+        seed=train_cfg.seed,
+        buffer_size=data_cfg.shuffle_buffer_size,
     )
     sample_texts = [
         example["text"] for example in train_dataset.take(data_cfg.tokenizer_sample_size)
@@ -234,7 +241,8 @@ def train(
             optimizer.zero_grad()
 
             wandb.log(
-                {"loss": accumulated_loss, "lr": lr, "grad_norm": total_norm.item()}, step=step
+                {"loss": accumulated_loss, "lr": lr, "grad_norm": total_norm.item()},
+                step=step,
             )
             logger.debug("step %d complete", step, extra={"step": step})
             accumulated_loss = 0.0
@@ -319,7 +327,9 @@ def main() -> None:
         "--use-amp", action=argparse.BooleanOptionalAction, default=TrainConfig.use_amp
     )
     parser.add_argument(
-        "--use-fused-ce", action=argparse.BooleanOptionalAction, default=TrainConfig.use_fused_ce
+        "--use-fused-ce",
+        action=argparse.BooleanOptionalAction,
+        default=TrainConfig.use_fused_ce,
     )
     parser.add_argument("--wandb-project", type=str, default=TrainConfig.wandb_project)
     parser.add_argument(
