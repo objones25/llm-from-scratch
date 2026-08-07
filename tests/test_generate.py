@@ -136,7 +136,20 @@ def test_repetition_penalty_avoids_repeating_top_greedy_token():
 def test_generate_works_after_checkpoint_and_tokenizer_round_trip(tmp_path):
     torch.manual_seed(0)
     model, tokenizer = _tiny_setup()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    # Matches train()'s real optimizer shape: a two-param-group AdamW (decay/no-decay
+    # split for weight decay), not a single-group optimizer. generate.py has no reason
+    # to construct an optimizer at all for inference — this test exists specifically to
+    # catch the class of bug where load_checkpoint() required one anyway and its shape
+    # silently had to match training's, which a single-group optimizer never would.
+    decay_params = [p for p in model.parameters() if p.dim() >= 2]
+    no_decay_params = [p for p in model.parameters() if p.dim() < 2]
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": decay_params, "weight_decay": 0.1},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ],
+        lr=1e-3,
+    )
 
     checkpoint_path = tmp_path / "step_1.pt"
     tokenizer_path = tmp_path / "tokenizer.json"
@@ -153,8 +166,7 @@ def test_generate_works_after_checkpoint_and_tokenizer_round_trip(tmp_path):
         dropout=0.0,
     )
     loaded_model = TransformerLM(loaded_config)
-    loaded_optimizer = torch.optim.AdamW(loaded_model.parameters(), lr=0.0)
-    load_checkpoint(checkpoint_path, loaded_model, loaded_optimizer)
+    load_checkpoint(checkpoint_path, loaded_model)
 
     output = generate(
         loaded_model, loaded_tokenizer, "hello", GenerationConfig(max_new_tokens=3, temperature=0.0)

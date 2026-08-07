@@ -30,9 +30,13 @@ def save_checkpoint(
 def load_checkpoint(
     path: str | Path,
     model: nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: torch.optim.Optimizer | None = None,
 ) -> tuple[int, dict | None, dict | None]:
     checkpoint = torch.load(path, map_location="cpu")
     model.load_state_dict(checkpoint["model_state"])
-    optimizer.load_state_dict(checkpoint["optimizer_state"])
+    # Inference-only callers (generate.py) have no optimizer of their own, and
+    # constructing a throwaway one just to satisfy this signature couples them to
+    # train()'s optimizer shape (e.g. its param-group structure) for no reason.
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
     return checkpoint["step"], checkpoint["dataset_state"], checkpoint.get("model_config")

@@ -159,9 +159,7 @@ def main() -> None:
     else:
         model_cfg = ModelConfig(vocab_size=tokenizer.get_vocab_size())
     model = TransformerLM(model_cfg)
-    # load_checkpoint requires an optimizer arg; inference discards it.
-    dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)
-    load_checkpoint(checkpoint_path, model, dummy_optimizer)
+    load_checkpoint(checkpoint_path, model)
 
     generation_cfg = GenerationConfig(
         max_new_tokens=args.max_new_tokens,

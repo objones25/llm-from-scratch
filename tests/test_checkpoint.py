@@ -30,6 +30,50 @@ def test_checkpoint_round_trip_restores_model_and_optimizer(tmp_path):
     assert model_config is None
 
 
+def test_load_checkpoint_without_optimizer_restores_model_only(tmp_path):
+    model = nn.Linear(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    loss = model(torch.randn(3, 4)).sum()
+    loss.backward()
+    optimizer.step()
+    original_weight = model.weight.detach().clone()
+
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_checkpoint(checkpoint_path, model, optimizer, step=7)
+
+    new_model = nn.Linear(4, 2)
+    step, _, _ = load_checkpoint(checkpoint_path, new_model)
+
+    assert step == 7
+    assert torch.equal(new_model.weight, original_weight)
+
+
+def test_load_checkpoint_without_optimizer_tolerates_mismatched_param_group_shape(tmp_path):
+    # The exact bug this guards against: generate.py has no reason to build an
+    # optimizer whose param-group structure must match whatever train() used (e.g.
+    # a two-group decay/no-decay AdamW) just to load a checkpoint for inference.
+    model = nn.Linear(4, 2)
+    decay_params = [p for p in model.parameters() if p.dim() >= 2]
+    no_decay_params = [p for p in model.parameters() if p.dim() < 2]
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": decay_params, "weight_decay": 0.1},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ],
+        lr=1e-3,
+    )
+    loss = model(torch.randn(3, 4)).sum()
+    loss.backward()
+    optimizer.step()
+
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_checkpoint(checkpoint_path, model, optimizer, step=1)
+
+    new_model = nn.Linear(4, 2)
+    # No optimizer at all — not even a single-group one — and it must still work.
+    load_checkpoint(checkpoint_path, new_model)
+
+
 def test_checkpoint_round_trip_preserves_model_config(tmp_path):
     config = ModelConfig(
         vocab_size=16,
