@@ -26,7 +26,9 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
         text_column="Text",
         val_split="test",
     ),
-    "reformer_enwik8": DatasetSpec(path="reds0510/enwik8-processed", name=None, split="train", val_holdout_examples=1000),
+    "reformer_enwik8": DatasetSpec(
+        path="reds0510/enwik8-processed", name=None, split="train", val_holdout_examples=1000
+    ),
     "fineweb_edu": DatasetSpec(
         path="HuggingFaceFW/fineweb-edu",
         name="sample-100BT",
@@ -41,7 +43,7 @@ def load_streaming_datasets(
     seed: int,
     buffer_size: int,
     load_fn: Callable[..., IterableDataset] = load_dataset,
-) -> tuple[IterableDataset, IterableDataset]:
+) -> tuple[IterableDataset, list[dict]]:
     spec = DATASET_REGISTRY[dataset_name]
     dataset = load_fn(spec.path, name=spec.name, split=spec.split, streaming=True)
     if spec.text_column != "text":
@@ -52,8 +54,18 @@ def load_streaming_datasets(
         val_dataset = load_fn(spec.path, name=spec.name, split=spec.val_split, streaming=True)
         if spec.text_column != "text":
             val_dataset = val_dataset.rename_column(spec.text_column, "text")
-        return shuffled, val_dataset
+        return shuffled, list(val_dataset)
 
+    # Materialized (not left lazy via .take()) because .take()/.skip() on the same
+    # `shuffled` object share its underlying _BaseExamplesIterable — iterating the val
+    # split mid-training (inside evaluate()) disturbs that shared object's internal
+    # state-tracking, silently corrupting train_dataset.state_dict() from that point on
+    # (every checkpoint after the first eval call records a stale, rewound stream
+    # position, so --resume silently retrains on already-seen data). A plain list can
+    # never share mutable streaming state with anything, which eliminates the bug class
+    # by construction. val_holdout_examples is always small (<=1000 by registry
+    # default), so materializing is cheap, and it also avoids re-streaming the val set
+    # from the network on every evaluate() call.
     val_dataset = shuffled.take(spec.val_holdout_examples)
     train_dataset = shuffled.skip(spec.val_holdout_examples)
-    return train_dataset, val_dataset
+    return train_dataset, list(val_dataset)

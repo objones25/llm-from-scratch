@@ -33,9 +33,7 @@ def test_load_streaming_datasets_carve_path_splits_train_and_val(monkeypatch):
     monkeypatch.setitem(
         DATASET_REGISTRY,
         "carve_test",
-        DatasetSpec(
-            path="x", name=None, split="train", text_column="Text", val_holdout_examples=5
-        ),
+        DatasetSpec(path="x", name=None, split="train", text_column="Text", val_holdout_examples=5),
     )
     train_dataset, val_dataset = load_streaming_datasets(
         "carve_test", seed=42, buffer_size=5, load_fn=_fake_load_dataset
@@ -85,9 +83,9 @@ def test_shuffled_skip_dataset_resumes_correctly_via_state_dict():
     # load_state_dict()), since the `datasets` library's own docs don't explicitly
     # confirm this combination round-trips correctly for exact --resume.
     def _build_source():
-        return Dataset.from_dict(
-            {"text": [f"example {i}" for i in range(20)]}
-        ).to_iterable_dataset(num_shards=4)
+        return Dataset.from_dict({"text": [f"example {i}" for i in range(20)]}).to_iterable_dataset(
+            num_shards=4
+        )
 
     n = 5
     dataset = _build_source().shuffle(seed=42, buffer_size=5).skip(n)
@@ -107,6 +105,67 @@ def test_shuffled_skip_dataset_resumes_correctly_via_state_dict():
     full = list(_build_source().shuffle(seed=42, buffer_size=5).skip(n))
 
     assert consumed + remaining == full
+
+
+def test_carve_path_val_is_materialized_and_does_not_disturb_train_state_dict(monkeypatch):
+    # Regression test for a critical bug: shuffled.take(n)/shuffled.skip(n) both wrap the
+    # *same* underlying _BaseExamplesIterable object (datasets doesn't copy it). If
+    # val_dataset were left as a lazy IterableDataset, iterating it mid-training (as
+    # evaluate() does) would disturb that shared object's internal state-tracking,
+    # silently corrupting train_dataset.state_dict() from that point on — every
+    # checkpoint saved after the first eval call would record a stale, rewound stream
+    # position, so --resume would silently rewind and retrain on already-seen data.
+    #
+    # The fix materializes val_dataset into a plain list[dict] for both the carve path
+    # and the native-split path. A plain list can never share mutable streaming state
+    # with anything by construction, which eliminates this bug class entirely — so the
+    # property this test locks in is simply "val_dataset is a list, not an
+    # IterableDataset", for both paths. (A full repro that iterates val mid-consumption
+    # of train and diffs state_dict() before/after is also included below for extra
+    # confidence, verified to fail against the pre-fix lazy .take()/.skip() return.)
+    monkeypatch.setitem(
+        DATASET_REGISTRY,
+        "shared_state_test",
+        DatasetSpec(path="x", name=None, split="train", text_column="Text", val_holdout_examples=5),
+    )
+    train_dataset, val_dataset = load_streaming_datasets(
+        "shared_state_test", seed=42, buffer_size=5, load_fn=_fake_load_dataset
+    )
+    assert isinstance(val_dataset, list)
+
+    train_iterator = iter(train_dataset)
+    consumed_before = [next(train_iterator) for _ in range(3)]
+    state_before_eval = train_dataset.state_dict()
+
+    # Simulate evaluate() fully iterating val mid-training, more than once (evaluate()
+    # is called repeatedly over the course of training, re-iterating the same val list
+    # every time).
+    list(val_dataset)
+    list(val_dataset)
+
+    state_after_eval = train_dataset.state_dict()
+    assert state_after_eval == state_before_eval
+
+    remaining = [example["text"] for example in train_iterator]
+    consumed_texts = [example["text"] for example in consumed_before]
+    full_texts = [example["text"] for example in train_dataset.skip(0)]
+    assert consumed_texts + remaining == full_texts
+
+
+def test_native_split_val_is_also_materialized(monkeypatch):
+    def _fake_load_dataset_by_split(path, name, split, streaming):
+        texts = [f"{split}-example-{i}" for i in range(5)]
+        return Dataset.from_dict({"text": texts}).to_iterable_dataset(num_shards=1)
+
+    monkeypatch.setitem(
+        DATASET_REGISTRY,
+        "native_materialize_test",
+        DatasetSpec(path="x", name=None, split="train", val_split="validation"),
+    )
+    _train_dataset, val_dataset = load_streaming_datasets(
+        "native_materialize_test", seed=42, buffer_size=5, load_fn=_fake_load_dataset_by_split
+    )
+    assert isinstance(val_dataset, list)
 
 
 def test_dataset_spec_rejects_both_val_split_and_val_holdout_examples():

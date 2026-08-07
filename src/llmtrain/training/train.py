@@ -141,8 +141,12 @@ def train(
         drop_last=True,
         collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len),
     )
-    val_dataloader = DataLoader(
-        val_dataset,  # type: ignore[arg-type]  # IterableDataset isn't in DataLoader's stub overloads, but is supported at runtime
+    # val_dataset is a plain list[dict] (materialized by load_streaming_datasets to avoid
+    # sharing mutable streaming state with train_dataset) — a valid map-style dataset at
+    # runtime (any Sequence with __getitem__/__len__ works), but list isn't a subtype of
+    # the Dataset[T] the stub declares, hence the ignore.
+    val_dataloader: DataLoader[dict] = DataLoader(
+        val_dataset,  # type: ignore[arg-type]  # list[dict] is a valid map-style dataset at runtime but isn't Dataset[T]
         batch_size=train_cfg.batch_size,
         pin_memory=True,
         drop_last=True,
