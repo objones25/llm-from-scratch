@@ -65,6 +65,7 @@ def evaluate(
     device: torch.device,
     autocast_dtype: torch.dtype | None,
     use_amp: bool,
+    use_fused_ce: bool,
 ) -> float:
     was_training = model.training
     model.eval()
@@ -73,8 +74,7 @@ def evaluate(
         for batch in val_dataloader:
             input_ids = batch.to(device, non_blocking=True)
             with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_amp):
-                logits = model(input_ids)
-                losses.append(next_token_loss(logits, input_ids, pad_id).item())
+                losses.append(compute_loss(model, input_ids, pad_id, use_fused_ce).item())
     model.train(was_training)
     return sum(losses) / len(losses)
 
@@ -193,6 +193,7 @@ def train(
     pad_id = tokenizer.token_to_id(PAD_TOKEN)
     assert pad_id is not None
     autocast_dtype = torch.bfloat16 if device.type == "cuda" else None
+    use_fused_ce_effective = train_cfg.use_fused_ce and device.type == "cuda"
 
     model.train()
     optimizer.zero_grad()
@@ -211,9 +212,8 @@ def train(
             with torch.autocast(
                 device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp
             ):
-                logits = model(input_ids)
                 loss = (
-                    next_token_loss(logits, input_ids, pad_id)
+                    compute_loss(model, input_ids, pad_id, use_fused_ce_effective)
                     / train_cfg.gradient_accumulation_steps
                 )
 
@@ -251,7 +251,13 @@ def train(
                 logger.info("saved checkpoint at step %d", step, extra={"step": step})
             if step % train_cfg.eval_interval == 0:
                 val_loss = evaluate(
-                    model, val_dataloader, pad_id, device, autocast_dtype, train_cfg.use_amp
+                    model,
+                    val_dataloader,
+                    pad_id,
+                    device,
+                    autocast_dtype,
+                    train_cfg.use_amp,
+                    use_fused_ce_effective,
                 )
                 wandb.log({"val_loss": val_loss}, step=step)
                 logger.info(
@@ -312,6 +318,9 @@ def main() -> None:
     parser.add_argument(
         "--use-amp", action=argparse.BooleanOptionalAction, default=TrainConfig.use_amp
     )
+    parser.add_argument(
+        "--use-fused-ce", action=argparse.BooleanOptionalAction, default=TrainConfig.use_fused_ce
+    )
     parser.add_argument("--wandb-project", type=str, default=TrainConfig.wandb_project)
     parser.add_argument(
         "--wandb-mode",
@@ -354,6 +363,7 @@ def main() -> None:
         eval_interval=args.eval_interval,
         compile=args.compile,
         use_amp=args.use_amp,
+        use_fused_ce=args.use_fused_ce,
         wandb_project=args.wandb_project,
         wandb_mode=args.wandb_mode,
         log_file=args.log_file,

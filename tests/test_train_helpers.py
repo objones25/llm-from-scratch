@@ -126,6 +126,7 @@ def test_evaluate_returns_finite_float_and_restores_train_mode():
         device=torch.device("cpu"),
         autocast_dtype=None,
         use_amp=False,
+        use_fused_ce=False,
     )
 
     assert math.isfinite(val_loss)
@@ -147,6 +148,7 @@ def test_evaluate_restores_eval_mode_if_model_was_already_in_eval_mode():
         device=torch.device("cpu"),
         autocast_dtype=None,
         use_amp=False,
+        use_fused_ce=False,
     )
 
     assert model.training is False
