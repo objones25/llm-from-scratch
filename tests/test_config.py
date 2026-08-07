@@ -60,3 +60,8 @@ def test_train_config_uses_llm_pretraining_adamw_values():
 def test_train_config_has_eval_interval_default():
     cfg = TrainConfig()
     assert cfg.eval_interval > 0
+
+
+def test_train_config_defaults_to_fused_cross_entropy():
+    cfg = TrainConfig()
+    assert cfg.use_fused_ce is True

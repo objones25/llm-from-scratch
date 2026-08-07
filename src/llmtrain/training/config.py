@@ -39,6 +39,7 @@ class TrainConfig:
     eval_interval: int = 500
     compile: bool = True
     use_amp: bool = True
+    use_fused_ce: bool = True
     wandb_project: str = "llm-training"
     wandb_mode: str = "online"
     log_file: str = "app.log"
