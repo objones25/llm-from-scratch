@@ -135,9 +135,13 @@ def train(
 
     model: torch.nn.Module = TransformerLM(model_cfg).to(device)
     if device.type == "cuda" and train_cfg.compile:
-        # torch.compile's stub returns a broad callable type; the object is
-        # still an nn.Module at runtime, hence the explicit annotation above.
-        model = torch.compile(model)  # type: ignore[assignment]
+        # model.compile() (in-place) is the current PyTorch guidance over the older
+        # functional torch.compile(model) wrapping — no reassignment needed, and
+        # unlike the functional form it never wraps the model in an OptimizedModule,
+        # so no _orig_mod.-prefixed state_dict keys, no attribute-proxying edge
+        # cases, and generate.py (which always loads into a fresh, uncompiled model)
+        # can never be affected by whatever wrapping strategy training used.
+        model.compile()
     # GPT-3/LLaMA/nanoGPT-style two-group AdamW: exclude 1-D parameters (RMSNorm gains —
     # the only 1-D params left now that every nn.Linear is bias=False) from weight decay.
     decay_params = [p for p in model.parameters() if p.dim() >= 2]
