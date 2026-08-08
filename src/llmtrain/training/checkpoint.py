@@ -1,8 +1,16 @@
+import logging
+import os
+import time
 from dataclasses import asdict
 from pathlib import Path
 
 import torch
 from torch import nn
+
+logger = logging.getLogger(__name__)
+
+_MAX_SAVE_ATTEMPTS = 3
+_RETRY_DELAY_SECONDS = 5.0
 
 
 def save_checkpoint(
@@ -15,16 +23,41 @@ def save_checkpoint(
     # TransformerLM stores its ModelConfig as `self.config`; not every nn.Module
     # passed here has one (e.g. plain nn.Linear in tests), so this is best-effort.
     model_config = getattr(model, "config", None)
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-            "step": step,
-            "dataset_state": dataset_state,
-            "model_config": asdict(model_config) if model_config is not None else None,
-        },
-        path,
-    )
+    state = {
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "step": step,
+        "dataset_state": dataset_state,
+        "model_config": asdict(model_config) if model_config is not None else None,
+    }
+
+    path = Path(path)
+    tmp_path = path.with_name(path.name + ".tmp")
+
+    # Checkpoints live on a network volume (see docs/training-guide.md's "dropped SSH
+    # connection" note — confirmed in a real run that a transient write failure against
+    # a network-mounted checkpoint dir raises RuntimeError: basic_ios::clear: iostream
+    # error partway through torch.save, independent of anything on the local/SSH side).
+    # Writing to a temp file and only renaming into place on success means a failed
+    # attempt can never leave a corrupt step_N.pt behind; retrying absorbs transient
+    # blips without losing the whole training process.
+    for attempt in range(1, _MAX_SAVE_ATTEMPTS + 1):
+        try:
+            torch.save(state, tmp_path)
+            os.replace(tmp_path, path)
+            return
+        except (OSError, RuntimeError):
+            tmp_path.unlink(missing_ok=True)
+            if attempt == _MAX_SAVE_ATTEMPTS:
+                raise
+            logger.warning(
+                "checkpoint save to %s failed on attempt %d/%d, retrying",
+                path,
+                attempt,
+                _MAX_SAVE_ATTEMPTS,
+                exc_info=True,
+            )
+            time.sleep(_RETRY_DELAY_SECONDS)
 
 
 def prune_old_checkpoints(checkpoint_dir: str | Path, keep_last_n: int) -> None:

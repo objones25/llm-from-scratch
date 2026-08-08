@@ -1,9 +1,11 @@
 from dataclasses import asdict
 
+import pytest
 import torch
 from datasets import Dataset
 from torch import nn
 
+import llmtrain.training.checkpoint as checkpoint_module
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.training.checkpoint import load_checkpoint, prune_old_checkpoints, save_checkpoint
 from llmtrain.training.config import ModelConfig
@@ -125,6 +127,50 @@ def test_checkpoint_round_trip_preserves_model_config(tmp_path):
     _, _, loaded_model_config = load_checkpoint(checkpoint_path, new_model, new_optimizer)
 
     assert loaded_model_config == asdict(config)
+
+
+def test_save_checkpoint_retries_transient_write_failure_and_succeeds(tmp_path, monkeypatch):
+    model = nn.Linear(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+    real_torch_save = torch.save
+    calls = {"count": 0}
+
+    def flaky_save(obj, path, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("basic_ios::clear: iostream error")
+        return real_torch_save(obj, path, *args, **kwargs)
+
+    monkeypatch.setattr(checkpoint_module.torch, "save", flaky_save)
+    monkeypatch.setattr(checkpoint_module.time, "sleep", lambda seconds: None)
+
+    checkpoint_path = tmp_path / "step_1.pt"
+    save_checkpoint(checkpoint_path, model, optimizer, step=1)
+
+    assert calls["count"] == 2
+    assert checkpoint_path.exists()
+    assert not checkpoint_path.with_name("step_1.pt.tmp").exists()
+
+
+def test_save_checkpoint_raises_and_cleans_up_tmp_file_after_exhausting_retries(
+    tmp_path, monkeypatch
+):
+    model = nn.Linear(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+    def always_fails(obj, path, *args, **kwargs):
+        raise RuntimeError("basic_ios::clear: iostream error")
+
+    monkeypatch.setattr(checkpoint_module.torch, "save", always_fails)
+    monkeypatch.setattr(checkpoint_module.time, "sleep", lambda seconds: None)
+
+    checkpoint_path = tmp_path / "step_1.pt"
+    with pytest.raises(RuntimeError, match="iostream error"):
+        save_checkpoint(checkpoint_path, model, optimizer, step=1)
+
+    assert not checkpoint_path.exists()
+    assert not checkpoint_path.with_name("step_1.pt.tmp").exists()
 
 
 def test_checkpoint_preserves_iterable_dataset_resume_position(tmp_path):

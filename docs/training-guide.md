@@ -7,7 +7,16 @@ project overview; this doc assumes you've already read that and just want to run
 
 ## Setup
 
-This applies both on your Mac and on a rented pod — clone, install, configure:
+This applies both on your Mac and on a rented pod — clone, install, configure. If `uv` isn't
+already on `PATH` (true on a fresh RunPod container — official RunPod PyTorch images don't
+ship it), install it first:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+```
+
+Then:
 
 ```bash
 git clone https://github.com/objones25/llm-from-scratch.git
@@ -56,10 +65,10 @@ uv run --env-file .env python -m llmtrain.training.train --dataset tiny_shakespe
 This completed successfully. `val_loss` at each eval step:
 
 | step | val_loss |
-|---|---|
-| 10 | 8.0030 |
-| 20 | 7.5120 |
-| 30 | 7.2297 |
+| ---- | -------- |
+| 10   | 8.0030   |
+| 20   | 7.5120   |
+| 30   | 7.2297   |
 
 That decreasing trend is the real sanity signal to look for — not the absolute values, and
 not (yet) the generated text quality; see below. Checkpoint pruning also behaved correctly:
@@ -164,8 +173,9 @@ to match, not the other way around:
    — this project needs Python 3.12+ and a working CUDA toolchain, but installs everything
    else itself via `uv sync`, so the exact template matters less than getting the data center
    and GPU type right.
-4. Attach the network volume you created above, and note its mount path (commonly
-   `/workspace`) — that's what `--checkpoint-dir` points at below.
+4. Attach the network volume you created above. Its mount path is commonly `/workspace`, but
+   don't assume — confirm once connected (see "On the pod" below) before trusting any
+   `--checkpoint-dir` value against it.
 5. Choose **Spot** over On-Demand where available — checkpoint-on-network-volume plus this
    project's exact stream resume (`--resume`) absorbs interruption risk, and spot is
    meaningfully cheaper for a workload that can tolerate being preempted and resumed.
@@ -185,17 +195,34 @@ and run `uv sync` — same steps as local, on the pod's own disk (not the networ
 network volume is for checkpoints via `--checkpoint-dir`, not the code checkout). Then,
 pod-specific additions:
 
+- Confirm the network volume's actual mount path before running anything that writes to it:
+  `df -h | grep workspace`. Don't assume it's `/workspace` — use whatever that command actually
+  shows, and pick a checkpoint subdirectory under it (e.g. `<mount>/checkpoints`) for
+  `--checkpoint-dir` below. `train()` creates this directory itself
+  (`checkpoint_dir.mkdir(parents=True, exist_ok=True)` in `training/train.py`), so there's no
+  need to `mkdir` it by hand — just get the path right.
 - `uv sync --extra cuda` (not needed on your Mac, required here) installs `liger-kernel` —
   `TrainConfig.use_fused_ce` defaults to `True`, so training will `ImportError` partway into a
   run (after tokenizer training and dataset streaming, not immediately) on a CUDA box that
   skips this step.
+- Official RunPod PyTorch images don't ship `nano`. Write `.env` without an editor instead:
+  ```bash
+  cat > .env << 'EOF'
+  HF_TOKEN=hf_your_actual_token_here
+  WANDB_API_KEY=your_actual_wandb_key_here
+  EOF
+  ```
+  (or `vi .env`, which is preinstalled, or `apt update && apt install -y nano` if you'd rather
+  have the editor).
 - `pip install wandb && wandb login` (or `uv run --env-file .env wandb login --verify` if
   `.env` is already set up) — confirm W&B auth works before starting a real run. If you're
   scripting pod setup (a startup script or custom template), bake this in so it survives fresh
   containers.
-- Launch training inside **tmux** (or `nohup ... &`) and disconnect — monitor progress via the
-  W&B dashboard rather than holding the SSH session open. No inbound port exposure is needed;
-  W&B is outbound-only.
+- Launch training with `nohup ... & disown` and disconnect — monitor progress via the W&B
+  dashboard rather than holding the SSH session open. No inbound port exposure is needed; W&B
+  is outbound-only. (`tmux` is the classic alternative but isn't installed on official RunPod
+  PyTorch images — `apt install -y tmux` if you'd rather have it; `nohup`/`disown` need no
+  install and are what every command in this guide uses.)
 
 ### Running the smoke test
 
@@ -206,10 +233,20 @@ throughput in this session**, so watch the first few step times in the log/W&B d
 adjust `--max-steps` if 15 minutes runs long or short:
 
 ```bash
-uv run --env-file .env python -m llmtrain.training.train --dataset reformer_enwik8 \
+nohup uv run --env-file .env python -m llmtrain.training.train --dataset reformer_enwik8 \
   --max-steps 150 --checkpoint-interval 25 --eval-interval 50 --keep-last-n-checkpoints 3 \
-  --checkpoint-dir /workspace/network-volume/checkpoints --wandb-mode online
+  --checkpoint-dir /workspace/checkpoints --wandb-mode online \
+  > /root/train.log 2>&1 &
+disown
 ```
+
+(`/workspace` assumes `df -h | grep workspace` showed that as the mount above — swap it if yours
+differs.) Every training command in this guide is wrapped in `nohup ... & disown` from here on
+— see Part 5's "dropped SSH connection" entry for why: without it, your SSH session dropping
+(laptop sleep, network blip, closed terminal) kills the training process mid-write and corrupts
+whatever checkpoint it was saving. `disown` detaches the background job from the shell so it
+survives the session ending, not just a sleeping laptop. Tail `/root/train.log` to watch
+progress, or just check the W&B dashboard instead of holding the terminal open.
 
 This uses the full default architecture and default `batch_size`/`gradient_accumulation_steps`
 (no overrides), since the point of this smoke test is to be representative of the real run.
@@ -224,10 +261,12 @@ just let it reach `--max-steps`), resume from that checkpoint and continue to th
 `--max-steps` target:
 
 ```bash
-uv run --env-file .env python -m llmtrain.training.train --dataset reformer_enwik8 \
+nohup uv run --env-file .env python -m llmtrain.training.train --dataset reformer_enwik8 \
   --max-steps 150 --checkpoint-interval 25 --eval-interval 50 --keep-last-n-checkpoints 3 \
-  --checkpoint-dir /workspace/network-volume/checkpoints \
-  --resume /workspace/network-volume/checkpoints/step_50.pt --wandb-mode online
+  --checkpoint-dir /workspace/checkpoints \
+  --resume /workspace/checkpoints/step_50.pt --wandb-mode online \
+  > /root/train_resume.log 2>&1 &
+disown
 ```
 
 Confirm in the logs/W&B that the step counter picks up at 50 rather than restarting at 0, and
@@ -244,9 +283,16 @@ Same code path as Parts 1 and 2 — the only required change is `--dataset finew
 real-scale `--max-steps` and a network-volume `--checkpoint-dir`:
 
 ```bash
-uv run --env-file .env python -m llmtrain.training.train --dataset fineweb_edu \
-  --checkpoint-dir /workspace/network-volume/checkpoints --wandb-mode online
+nohup uv run --env-file .env python -m llmtrain.training.train --dataset fineweb_edu \
+  --checkpoint-dir /workspace/checkpoints --wandb-mode online \
+  > /root/train.log 2>&1 &
+disown
 ```
+
+(same mount as Part 2 — re-verify with `df -h | grep workspace` if this is a different/fresh pod,
+and swap `/workspace` if it differs.) This run lasts far longer than Part 2's smoke test, so
+`nohup ... & disown` matters even more here — see the note in Part 2 and Part 5's "dropped SSH
+connection" entry.
 
 Left at their `TrainConfig` defaults (`max_steps=10000`, `batch_size=32`,
 `gradient_accumulation_steps=8`, `max_seq_len=2048`), this trains on `32 × 8 × 2048 =
@@ -320,7 +366,7 @@ single-token forward pass rather than re-running the whole growing sequence.
 
 **`--resume` silently drops examples across the resume boundary, catastrophically so on
 `tiny_shakespeare`.** `datasets` (confirmed v5.0.1) doesn't preserve the shuffle buffer's
-*contents* across `state_dict()`/`load_state_dict()` — only enough to resume the underlying
+_contents_ across `state_dict()`/`load_state_dict()` — only enough to resume the underlying
 stream position. On `load_state_dict`, it refills the buffer by reading `buffer_size`
 (default 1000) new elements from the stream before yielding again, and those refill elements
 are never yielded themselves — so every `--resume` permanently drops up to `buffer_size`
@@ -342,6 +388,59 @@ own) in `tests/test_streaming.py::test_shuffled_skip_dataset_resumes_correctly_v
 **Checkpoint storage is a real, capped cost, not just tidiness.** See Part 3 — ~1GB per
 checkpoint at the default architecture, capped at `--keep-last-n-checkpoints` (default 3) via
 `prune_old_checkpoints()`.
+
+**A checkpoint save can be interrupted mid-write and corrupt that checkpoint — now fixed at the
+code level, but still recoverable manually on older checkpoints/checkouts.** Confirmed twice in
+real runs, surfacing both times as `RuntimeError: basic_ios::clear: iostream error` out of
+`torch.serialization.save` (`_open_zipfile_writer.__exit__` → `write_end_of_file`): once from a
+local machine going to sleep and dropping the SSH session while `train.py` ran in the
+foreground, and once under `nohup ... & disown` with no SSH session involved at all. The second
+occurrence ruled out "dropped SSH" as the sole cause — `--checkpoint-dir` on the pod is a
+network-mounted volume (MooseFS, confirmed via `df -h`), and the real root cause is a transient
+write failure against that network mount, which a dropped SSH session can trigger but isn't
+required for. `save_checkpoint()` (`src/llmtrain/training/checkpoint.py`) now writes to a
+`step_N.pt.tmp` file and only `os.replace()`s it into place on success, retrying transient
+`RuntimeError`/`OSError` failures up to 3 times with a 5s delay — so a blip like this can no
+longer corrupt a checkpoint, and self-heals without losing the whole training process. If
+you're on an older checkout without this fix, or the retries themselves are exhausted (the
+network mount is down for longer than ~15s), recover manually:
+
+The corrupt file can be a normal-looking size — checkpoints of the same model/optimizer shapes
+are always similarly sized regardless of corruption, since only tensor _values_ differ, not
+structure — so size alone doesn't confirm validity. To recover:
+
+1. Identify the last checkpoint written successfully in the logs (`saved checkpoint at step N`)
+   — the crash happens on the _next_ save attempt after that.
+
+2. Confirm the suspect file is actually corrupt (official RunPod PyTorch images don't ship
+   `unzip`, so use Python's `zipfile` module instead — a `torch.save` file is a zip archive):
+
+   ```bash
+   python3 -c "import zipfile; print(zipfile.ZipFile('/workspace/checkpoints/step_N.pt').testzip())"
+   ```
+
+   `None` means valid; a `BadZipFile`/CRC-mismatch result or traceback means corrupt.
+
+3. Move the corrupt file aside rather than deleting it (`mv step_N.pt step_N.pt.corrupt`), in
+   case you want to inspect it later.
+
+4. Resume from the last good checkpoint, again under `nohup ... & disown` (see "On the pod"
+   above) so a future disconnect can't kill the process again:
+
+   ```bash
+   nohup uv run --env-file .env python -m llmtrain.training.train --dataset fineweb_edu \
+     --checkpoint-dir /workspace/checkpoints --wandb-mode online \
+     --resume /workspace/checkpoints/step_<last-good>.pt \
+     > /root/train_resume.log 2>&1 &
+   disown
+   ```
+
+   `disown` detaches the background job from the current shell so it survives the SSH session
+   itself ending, not just a sleeping laptop. Tail `/root/train_resume.log` to confirm step
+   logging resumes, then rely on the W&B dashboard rather than holding the terminal open.
+5. In W&B, the resumed run appears as a separate run with `step` continuing from where the
+   crashed run left off (not restarting at 0) — group or overlay the two runs in the UI to view
+   them as one continuous curve, since they share the same `step` axis.
 
 **`--use-fused-ce` (default `True`) needs `liger-kernel`, and fails late, not immediately.**
 On a CUDA box where `uv sync --extra cuda` was skipped, training gets through tokenizer

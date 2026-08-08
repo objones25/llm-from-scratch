@@ -45,7 +45,15 @@ training/checkpoint.py # saves/loads model + optimizer + dataset iterator state 
                        # structure) and prune_old_checkpoints() keeps only the N most recent step_*.pt
                        # files (TrainConfig.keep_last_n_checkpoints, default 3) — checkpoints are ~1GB
                        # each at the real fineweb_edu-scale config, so unbounded accumulation over a
-                       # long run is a real network-volume storage cost, not just a tidiness concern
+                       # long run is a real network-volume storage cost, not just a tidiness concern.
+                       # save_checkpoint() writes to a step_N.pt.tmp file and only os.replace()s it
+                       # into place on success, retrying transient failures (RuntimeError/OSError) up
+                       # to 3 times with a 5s delay before giving up — added after a real run twice hit
+                       # `RuntimeError: basic_ios::clear: iostream error` mid-torch.save against a
+                       # network-mounted (MooseFS) --checkpoint-dir, once from a dropped SSH session and
+                       # once under nohup/disown with no SSH involvement at all, pointing at transient
+                       # network-volume write failures rather than anything SSH-related — see
+                       # docs/training-guide.md Part 5
 generate.py             # KV-cache-backed text generation from a checkpoint; main() is a second CLI entry point
 logging_config.py       # dictConfig: stdout + JSONL file handler
 ```
