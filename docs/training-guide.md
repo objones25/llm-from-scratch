@@ -334,6 +334,32 @@ checkpoint itself (falls back to `ModelConfig()` defaults for older checkpoints 
 that field existed) — so architecture fields that change numerics without changing tensor
 shapes (e.g. `rope_theta`) can't silently drift between training and generation.
 
+**Both `--checkpoint` and `--tokenizer-path` accept an `s3://bucket/key` URI instead of a
+local path** — useful for running `generate.py` straight against a pod's network volume after
+the pod itself has stopped, without a manual `scp` first (RunPod exposes network volumes over
+an S3-compatible API even when nothing is running). Requires the optional `s3` dependency
+group (`uv sync --extra s3`) and, in `.env`, an S3 API key pair from the RunPod console plus
+the endpoint/region:
+
+```dotenv
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_ENDPOINT_URL_S3=https://s3api-<region>.runpod.io
+AWS_DEFAULT_REGION=<region>
+```
+
+```bash
+uv run --env-file .env python -m llmtrain.generate \
+  --checkpoint s3://<bucket>/checkpoints/step_10000.pt \
+  --prompt "..."
+```
+
+`--tokenizer-path` doesn't need to be passed here either — it defaults to `tokenizer.json` in
+the same S3 prefix as `--checkpoint`, same as the local-path default. First run downloads and
+caches under `~/.cache/llmtrain/s3/<bucket>/<key>`; later runs against the same checkpoint skip
+the download entirely (checkpoints are treated as immutable once written) — matters in
+practice, since these are ~1GB+ files.
+
 Sampling happens per-token in `_sample()` (`src/llmtrain/generate.py`), in this exact order:
 
 1. **Repetition penalty** (`--repetition-penalty`, default `1.0`) is applied first, and

@@ -55,6 +55,19 @@ training/checkpoint.py # saves/loads model + optimizer + dataset iterator state 
                        # network-volume write failures rather than anything SSH-related — see
                        # docs/training-guide.md Part 5
 generate.py             # KV-cache-backed text generation from a checkpoint; main() is a second CLI entry point
+s3.py                   # resolve_local_path()/sibling_path(): --checkpoint/--tokenizer-path accept
+                       # s3://bucket/key as well as local paths (added so generate.py can run
+                       # directly against a stopped pod's network volume without a manual scp first —
+                       # RunPod exposes network volumes over an S3-compatible API even when the pod
+                       # itself isn't running). boto3 is a lazy import inside resolve_local_path(), only
+                       # required when an s3:// path is actually used (optional `s3` extra in
+                       # pyproject.toml, same pattern as the `cuda` extra for liger-kernel). Downloads
+                       # are cached under ~/.cache/llmtrain/s3/<bucket>/<key> keyed by bucket/key, skipped
+                       # on repeat runs against the same checkpoint since checkpoints are immutable once
+                       # written — matters in practice, checkpoints are ~1GB+. Endpoint/region come from
+                       # the AWS_ENDPOINT_URL_S3/AWS_DEFAULT_REGION env vars (botocore >=1.31 resolves
+                       # these automatically), so a RunPod S3 API key pair plus those two vars in .env is
+                       # enough — no endpoint config in code.
 logging_config.py       # dictConfig: stdout + JSONL file handler
 ```
 

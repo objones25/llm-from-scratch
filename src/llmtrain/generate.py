@@ -1,11 +1,11 @@
 import argparse
-from pathlib import Path
 
 import torch
 from tokenizers import Tokenizer
 
 from llmtrain.model.cache import KVCache
 from llmtrain.model.transformer import TransformerLM
+from llmtrain.s3 import resolve_local_path, sibling_path
 from llmtrain.training.checkpoint import load_checkpoint
 from llmtrain.training.config import GenerationConfig, ModelConfig
 
@@ -128,8 +128,18 @@ def generate(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate text from a trained checkpoint")
-    parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--tokenizer-path", type=str, default=None)
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        required=True,
+        help="local path or s3://bucket/key (requires `uv sync --extra s3`)",
+    )
+    parser.add_argument(
+        "--tokenizer-path",
+        type=str,
+        default=None,
+        help="local path or s3://bucket/key; defaults to tokenizer.json next to --checkpoint",
+    )
     parser.add_argument("--prompt", type=str, required=True)
     parser.add_argument("--max-new-tokens", type=int, default=GenerationConfig.max_new_tokens)
     parser.add_argument("--temperature", type=float, default=GenerationConfig.temperature)
@@ -140,12 +150,9 @@ def main() -> None:
     parser.add_argument("--top-p", type=float, default=GenerationConfig.top_p)
     args = parser.parse_args()
 
-    checkpoint_path = Path(args.checkpoint)
-    tokenizer_path = (
-        Path(args.tokenizer_path)
-        if args.tokenizer_path
-        else checkpoint_path.parent / "tokenizer.json"
-    )
+    tokenizer_uri = args.tokenizer_path or sibling_path(args.checkpoint, "tokenizer.json")
+    checkpoint_path = resolve_local_path(args.checkpoint)
+    tokenizer_path = resolve_local_path(tokenizer_uri)
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
     # Peek the checkpoint for its persisted model_config so architecture fields that change

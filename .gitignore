@@ -6,6 +6,7 @@ __pycache__/
 *.egg-info/
 .venv/
 .env
+credentials.txt
 checkpoints/
 app.log*
 wandb/

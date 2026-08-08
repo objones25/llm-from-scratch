@@ -12,6 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = ["liger-kernel>=0.8"]
+s3 = ["boto3>=1.34"]
 
 [dependency-groups]
 dev = [
