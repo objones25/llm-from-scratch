@@ -5,6 +5,7 @@ import os
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict
 from pathlib import Path
+from typing import TypeVar
 
 import torch
 import wandb
@@ -13,7 +14,8 @@ from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from llmtrain.data.streaming import load_streaming_datasets
+from llmtrain.data.chat import IGNORE_INDEX, encode_chat_batch
+from llmtrain.data.streaming import DATASET_REGISTRY, load_streaming_datasets
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
 from llmtrain.model.transformer import TransformerLM
@@ -22,52 +24,52 @@ from llmtrain.training.config import DataConfig, ModelConfig, TrainConfig
 
 logger = logging.getLogger(__name__)
 
+_Batch = TypeVar("_Batch")
+
 
 def select_device() -> torch.device:
     return torch.accelerator.current_accelerator(check_available=True) or torch.device("cpu")
 
 
-def next_token_loss(logits: torch.Tensor, input_ids: torch.Tensor, pad_id: int) -> torch.Tensor:
+def next_token_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     shift_logits = logits[:, :-1, :]
-    shift_targets = input_ids[:, 1:]
+    shift_labels = labels[:, 1:]
     return F.cross_entropy(
         shift_logits.reshape(-1, shift_logits.size(-1)),
-        shift_targets.reshape(-1),
-        ignore_index=pad_id,
+        shift_labels.reshape(-1),
+        ignore_index=IGNORE_INDEX,
     )
 
 
 def next_token_loss_fused(
     hidden: torch.Tensor,
     head_weight: torch.Tensor,
-    input_ids: torch.Tensor,
-    pad_id: int,
+    labels: torch.Tensor,
 ) -> torch.Tensor:
     from liger_kernel.transformers import (  # type: ignore[import-not-found]
         LigerFusedLinearCrossEntropyLoss,
     )
 
     shift_hidden = hidden[:, :-1, :].reshape(-1, hidden.size(-1))
-    shift_targets = input_ids[:, 1:].reshape(-1)
-    loss_fn = LigerFusedLinearCrossEntropyLoss(ignore_index=pad_id)
-    return loss_fn(head_weight, shift_hidden, shift_targets)
+    shift_labels = labels[:, 1:].reshape(-1)
+    loss_fn = LigerFusedLinearCrossEntropyLoss(ignore_index=IGNORE_INDEX)
+    return loss_fn(head_weight, shift_hidden, shift_labels)
 
 
 def compute_loss(
-    model: torch.nn.Module, input_ids: torch.Tensor, pad_id: int, use_fused_ce: bool
+    model: torch.nn.Module, input_ids: torch.Tensor, labels: torch.Tensor, use_fused_ce: bool
 ) -> torch.Tensor:
     if use_fused_ce:
         hidden = model(input_ids, return_hidden=True)  # type: ignore[misc]
         head_weight = model.token_emb.weight  # type: ignore[union-attr,attr-defined]
-        return next_token_loss_fused(hidden, head_weight, input_ids, pad_id)  # type: ignore[arg-type]
+        return next_token_loss_fused(hidden, head_weight, labels)  # type: ignore[arg-type]
     logits = model(input_ids)
-    return next_token_loss(logits, input_ids, pad_id)
+    return next_token_loss(logits, labels)
 
 
 def evaluate(
     model: torch.nn.Module,
     val_dataloader: DataLoader,
-    pad_id: int,
     device: torch.device,
     autocast_dtype: torch.dtype | None,
     use_amp: bool,
@@ -77,18 +79,28 @@ def evaluate(
     model.eval()
     losses = []
     with torch.no_grad():
-        for batch in val_dataloader:
-            input_ids = batch.to(device, non_blocking=True)
+        for input_ids, labels in val_dataloader:
+            input_ids = input_ids.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
             with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_amp):
-                losses.append(compute_loss(model, input_ids, pad_id, use_fused_ce).item())
+                losses.append(compute_loss(model, input_ids, labels, use_fused_ce).item())
     model.train(was_training)
     return sum(losses) / len(losses)
 
 
-def make_collate_fn(tokenizer: Tokenizer, max_seq_len: int) -> Callable[[list[dict]], torch.Tensor]:
-    def collate(examples: list[dict]) -> torch.Tensor:
-        texts = [example["text"] for example in examples]
-        return encode_batch(tokenizer, texts, max_seq_len)
+def make_collate_fn(
+    tokenizer: Tokenizer, max_seq_len: int, messages_column: str | None
+) -> Callable[[list[dict]], tuple[torch.Tensor, torch.Tensor]]:
+    pad_id = tokenizer.token_to_id(PAD_TOKEN)
+    assert pad_id is not None
+
+    def collate(examples: list[dict]) -> tuple[torch.Tensor, torch.Tensor]:
+        if messages_column is not None:
+            return encode_chat_batch(tokenizer, examples, pad_id, max_seq_len)
+        input_ids = encode_batch(tokenizer, [ex["text"] for ex in examples], max_seq_len)
+        labels = input_ids.clone()
+        labels[input_ids == pad_id] = IGNORE_INDEX
+        return input_ids, labels
 
     return collate
 
@@ -124,13 +136,13 @@ def get_lr(step: int, train_cfg: TrainConfig) -> float:
     return train_cfg.min_lr + coeff * (train_cfg.lr - train_cfg.min_lr)
 
 
-def collect_micro_batches(
-    dataloader: Iterable[torch.Tensor], data_iter: Iterator[torch.Tensor], n: int
-) -> tuple[list[torch.Tensor], Iterator[torch.Tensor]]:
+def collect_micro_batches(  # noqa: UP047 -- TypeVar kept per design (Task 3 brief), not PEP 695
+    dataloader: Iterable[_Batch], data_iter: Iterator[_Batch], n: int
+) -> tuple[list[_Batch], Iterator[_Batch]]:
     # A dataloader smaller than n (e.g. tiny_shakespeare with a large
     # --gradient-accumulation-steps) can wrap around more than once per call — each
     # StopIteration starts a fresh epoch rather than raising past a bare `next()`.
-    batches = []
+    batches: list[_Batch] = []
     for _ in range(n):
         try:
             batch = next(data_iter)
@@ -144,19 +156,19 @@ def collect_micro_batches(
 def train_step(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
-    batches: list[torch.Tensor],
+    batches: list[tuple[torch.Tensor, torch.Tensor]],
     train_cfg: TrainConfig,
     device: torch.device,
-    pad_id: int,
     autocast_dtype: torch.dtype | None,
     use_fused_ce: bool,
     step: int,
 ) -> tuple[float, float, float]:
     accumulated_loss = 0.0
-    for batch in batches:
-        input_ids = batch.to(device, non_blocking=True)
+    for input_ids, labels in batches:
+        input_ids = input_ids.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
         with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp):
-            loss = compute_loss(model, input_ids, pad_id, use_fused_ce) / len(batches)
+            loss = compute_loss(model, input_ids, labels, use_fused_ce) / len(batches)
         loss.backward()
         accumulated_loss += loss.item()
 
@@ -230,6 +242,7 @@ def train(
             train_dataset.load_state_dict(dataset_state)
         logger.info("resumed from checkpoint at step %d", step, extra={"step": step})
 
+    messages_column = DATASET_REGISTRY[data_cfg.dataset_name].messages_column
     dataloader = DataLoader(
         train_dataset,  # type: ignore[arg-type]  # IterableDataset isn't in DataLoader's stub overloads, but is supported at runtime
         batch_size=train_cfg.batch_size,
@@ -237,7 +250,7 @@ def train(
         # A ragged final batch would force torch.compile to recompile for the new shape,
         # spiking memory mid-run; dropping it keeps every batch's shape constant.
         drop_last=True,
-        collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len),
+        collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len, messages_column),
     )
     # val_dataset is a plain list[dict] (materialized by load_streaming_datasets to avoid
     # sharing mutable streaming state with train_dataset) — a valid map-style dataset at
@@ -248,7 +261,7 @@ def train(
         batch_size=train_cfg.batch_size,
         pin_memory=True,
         drop_last=True,
-        collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len),
+        collate_fn=make_collate_fn(tokenizer, data_cfg.max_seq_len, messages_column),
     )
 
     wandb.init(
@@ -266,8 +279,6 @@ def train(
     tokenizer.save(str(checkpoint_dir / "tokenizer.json"))
     logger.info("saved tokenizer to %s", checkpoint_dir / "tokenizer.json")
 
-    pad_id = tokenizer.token_to_id(PAD_TOKEN)
-    assert pad_id is not None
     autocast_dtype = torch.bfloat16 if device.type == "cuda" else None
     use_fused_ce_effective = train_cfg.use_fused_ce and device.type == "cuda"
 
@@ -279,7 +290,7 @@ def train(
     # re-iterates the dataset (a fresh epoch) whenever that happens. No-op for datasets
     # large enough to never exhaust within a normal run (reformer_enwik8, fineweb_edu);
     # this is what lets small datasets like tiny_shakespeare train for more than one epoch.
-    data_iter: Iterator[torch.Tensor] = iter(dataloader)
+    data_iter: Iterator[tuple[torch.Tensor, torch.Tensor]] = iter(dataloader)
     while step < train_cfg.max_steps:
         batches, data_iter = collect_micro_batches(
             dataloader, data_iter, train_cfg.gradient_accumulation_steps
@@ -290,7 +301,6 @@ def train(
             batches,
             train_cfg,
             device,
-            pad_id,
             autocast_dtype,
             use_fused_ce_effective,
             step,
@@ -314,7 +324,6 @@ def train(
             val_loss = evaluate(
                 model,
                 val_dataloader,
-                pad_id,
                 device,
                 autocast_dtype,
                 train_cfg.use_amp,

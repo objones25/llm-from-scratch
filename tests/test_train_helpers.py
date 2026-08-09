@@ -33,21 +33,58 @@ def test_select_device_returns_a_torch_device():
 
 def test_next_token_loss_is_near_zero_for_perfect_predictions():
     vocab_size = 4
-    input_ids = torch.tensor([[0, 1, 2, 3]])
+    labels = torch.tensor([[0, 1, 2, 3]])
     logits = torch.full((1, 4, vocab_size), -100.0)
-    for position, target_id in enumerate(input_ids[0, 1:]):
+    for position, target_id in enumerate(labels[0, 1:]):
         logits[0, position, target_id] = 100.0
-    loss = next_token_loss(logits, input_ids, pad_id=99)
+    loss = next_token_loss(logits, labels)
     assert loss.item() < 0.01
 
 
-def test_make_collate_fn_encodes_a_batch_of_examples():
+def test_next_token_loss_ignores_ignore_index_positions():
+    vocab_size = 4
+    logits = torch.randn(1, 3, vocab_size)
+    labels_with_ignored = torch.tensor([[0, -100, 2]])
+    labels_all_real = torch.tensor([[0, 1, 2]])
+    # Wrong prediction at the ignored position shouldn't move the loss at all.
+    loss_ignored = next_token_loss(logits, labels_with_ignored)
+    loss_real = next_token_loss(logits, labels_all_real)
+    assert loss_ignored.item() != pytest.approx(loss_real.item())
+
+
+def test_make_collate_fn_encodes_a_batch_of_pretraining_examples():
     texts = ["hello world", "hello there", "the quick brown fox"]
     tokenizer = train_tokenizer(texts, vocab_size=50)
-    collate = make_collate_fn(tokenizer, max_seq_len=5)
-    batch = collate([{"text": "hello world"}, {"text": "hello there"}])
-    assert batch.shape == (2, 5)
-    assert batch.dtype == torch.long
+    collate = make_collate_fn(tokenizer, max_seq_len=5, messages_column=None)
+
+    input_ids, labels = collate([{"text": "hello world"}, {"text": "hello there"}])
+
+    assert input_ids.shape == (2, 5)
+    assert input_ids.dtype == torch.long
+    assert labels.shape == (2, 5)
+    pad_id = tokenizer.token_to_id("[PAD]")
+    assert torch.equal(labels == -100, input_ids == pad_id)
+
+
+def test_make_collate_fn_encodes_a_batch_of_chat_examples():
+    texts = ["<|user|>\nhi\n", "<|assistant|>\nhello\n"]
+    tokenizer = train_tokenizer(texts, vocab_size=100)
+    collate = make_collate_fn(tokenizer, max_seq_len=20, messages_column="messages")
+    examples = [
+        {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ]
+        }
+    ]
+
+    input_ids, labels = collate(examples)
+
+    assert input_ids.shape == (1, 20)
+    assert labels.shape == (1, 20)
+    assert input_ids.dtype == torch.long
+    assert labels.dtype == torch.long
 
 
 def test_get_lr_ramps_linearly_during_warmup():
@@ -123,16 +160,13 @@ def test_evaluate_returns_finite_float_and_restores_train_mode():
     model = TransformerLM(config)
     model.train()
 
-    # A plain list of batches stands in for a DataLoader here — evaluate() only ever
-    # does `for batch in val_dataloader:`, so any iterable of pre-batched tensors works,
-    # and this avoids pulling in real DataLoader/dataset machinery for a unit test.
-    batch = torch.randint(0, 16, (2, 6))
-    val_dataloader = [batch, batch]
+    input_ids = torch.randint(0, 16, (2, 6))
+    labels = input_ids.clone()
+    val_dataloader = [(input_ids, labels), (input_ids, labels)]
 
     val_loss = evaluate(
         model,
         val_dataloader,
-        pad_id=0,
         device=torch.device("cpu"),
         autocast_dtype=None,
         use_amp=False,
@@ -148,13 +182,13 @@ def test_evaluate_restores_eval_mode_if_model_was_already_in_eval_mode():
     model = TransformerLM(config)
     model.eval()
 
-    batch = torch.randint(0, 16, (2, 6))
-    val_dataloader = [batch]
+    input_ids = torch.randint(0, 16, (2, 6))
+    labels = input_ids.clone()
+    val_dataloader = [(input_ids, labels)]
 
     evaluate(
         model,
         val_dataloader,
-        pad_id=0,
         device=torch.device("cpu"),
         autocast_dtype=None,
         use_amp=False,
@@ -169,11 +203,12 @@ def test_compute_loss_non_fused_matches_direct_next_token_loss():
     model = TransformerLM(config)
     model.eval()
     input_ids = torch.randint(0, 16, (2, 6))
+    labels = input_ids.clone()
 
     with torch.no_grad():
-        loss_via_compute_loss = compute_loss(model, input_ids, pad_id=0, use_fused_ce=False)
+        loss_via_compute_loss = compute_loss(model, input_ids, labels, use_fused_ce=False)
         logits = model(input_ids)
-        loss_direct = next_token_loss(logits, input_ids, pad_id=0)
+        loss_direct = next_token_loss(logits, labels)
 
     assert torch.allclose(loss_via_compute_loss, loss_direct, atol=1e-6)
 
@@ -203,7 +238,9 @@ def test_train_step_updates_parameters_and_zeros_grads_after():
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
     train_cfg = TrainConfig(grad_clip=1.0, lr=1e-2, min_lr=1e-3, warmup_steps=0, max_steps=100)
-    batches = [torch.randint(0, 16, (2, 6)), torch.randint(0, 16, (2, 6))]
+    batch_1 = torch.randint(0, 16, (2, 6))
+    batch_2 = torch.randint(0, 16, (2, 6))
+    batches = [(batch_1, batch_1.clone()), (batch_2, batch_2.clone())]
     params_before = [p.clone() for p in model.parameters()]
 
     avg_loss, grad_norm, lr = train_step(
@@ -212,7 +249,6 @@ def test_train_step_updates_parameters_and_zeros_grads_after():
         batches,
         train_cfg,
         device=torch.device("cpu"),
-        pad_id=0,
         autocast_dtype=None,
         use_fused_ce=False,
         step=0,
