@@ -33,6 +33,10 @@ def encode_chat_example(
 def encode_chat_batch(
     tokenizer: Tokenizer, examples: list[dict], pad_id: int, max_seq_len: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    # "messages" is hardcoded here regardless of DatasetSpec.messages_column's value —
+    # that field is only used elsewhere as an is-this-chat-data flag, not as a configurable
+    # key name. Both current chat datasets (smoltalk, no_robots) use "messages"; a future
+    # chat dataset with a differently-named column would need this function updated too.
     pairs = [
         encode_chat_example(tokenizer, ex["messages"], pad_id, max_seq_len) for ex in examples
     ]

@@ -4,6 +4,7 @@ from dataclasses import asdict
 
 import pytest
 import torch
+import torch.nn.functional as F
 from datasets import Dataset
 
 from llmtrain.data.tokenizer import train_tokenizer
@@ -47,11 +48,24 @@ def test_next_token_loss_ignores_ignore_index_positions():
     vocab_size = 4
     logits = torch.randn(1, 3, vocab_size)
     labels_with_ignored = torch.tensor([[0, -100, 2]])
-    labels_all_real = torch.tensor([[0, 1, 2]])
-    # Wrong prediction at the ignored position shouldn't move the loss at all.
+
     loss_ignored = next_token_loss(logits, labels_with_ignored)
-    loss_real = next_token_loss(logits, labels_all_real)
-    assert loss_ignored.item() != pytest.approx(loss_real.item())
+
+    # next_token_loss shifts internally: shift_logits = logits[:, :-1, :] (positions 0, 1),
+    # shift_labels = labels[:, 1:] = [-100, 2]. Only position 1 (logits[0, 1, :] predicting
+    # label 2) should contribute; position 0 (predicting the ignored -100) must not.
+    # Prove it by making position 0's prediction maximally, deliberately wrong (it would
+    # dominate the loss if it were not ignored) and confirming the loss is unaffected.
+    logits_with_extreme_wrong_prediction = logits.clone()
+    logits_with_extreme_wrong_prediction[0, 0, :] = torch.tensor([1000.0, -1000.0, -1000.0, -1000.0])
+    loss_with_extreme_wrong = next_token_loss(logits_with_extreme_wrong_prediction, labels_with_ignored)
+
+    # shift_logits index 1 == logits[0, 1, :]; shift_labels index 1 == labels[0, 2] == 2
+    # (shift_labels = labels[:, 1:], so shift index i maps to original label index i+1).
+    manual_expected = F.cross_entropy(logits[0, 1:2, :], labels_with_ignored[0, 2:3])
+
+    assert loss_ignored.item() == pytest.approx(manual_expected.item())
+    assert loss_with_extreme_wrong.item() == pytest.approx(manual_expected.item())
 
 
 def test_make_collate_fn_encodes_a_batch_of_pretraining_examples():

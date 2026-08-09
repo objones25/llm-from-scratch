@@ -132,15 +132,21 @@ Full CLI reference for both entry points below (or run either with `--help`).
 **`train.py`**:
 
 ```text
-python -m llmtrain.training.train --dataset {tiny_shakespeare,reformer_enwik8,fineweb_edu}
+python -m llmtrain.training.train --dataset {tiny_shakespeare,reformer_enwik8,fineweb_edu,smoltalk,no_robots}
     [--shuffle-buffer-size N] [--max-seq-len N] [--tokenizer-vocab-size N] [--tokenizer-sample-size N]
     [--d-model N] [--n-layers N] [--n-heads N] [--n-kv-heads N] [--dropout F] [--rope-theta F]
     [--max-steps N] [--batch-size N] [--gradient-accumulation-steps N] [--grad-clip F]
     [--lr F] [--min-lr F] [--warmup-steps N] [--weight-decay F] [--beta1 F] [--beta2 F] [--seed N]
     [--checkpoint-dir DIR] [--checkpoint-interval N] [--keep-last-n-checkpoints N] [--eval-interval N]
     [--compile/--no-compile] [--use-amp/--no-use-amp] [--use-fused-ce/--no-use-fused-ce]
-    [--wandb-project NAME] [--wandb-mode {online,offline,disabled}] [--log-file PATH] [--resume PATH]
+    [--wandb-project NAME] [--wandb-mode {online,offline,disabled}] [--log-file PATH]
+    [--resume PATH] [--init-from-checkpoint PATH] [--tokenizer-path PATH]
 ```
+
+`smoltalk`/`no_robots` are chat datasets (SFT) and require either `--init-from-checkpoint`
+(starting an SFT run from a pretrained checkpoint) or `--resume`; `--tokenizer-path` requires
+`--init-from-checkpoint`. See `CLAUDE.md`'s architecture section for the `--resume` /
+`--init-from-checkpoint` architecture-mismatch footgun.
 
 **`generate.py`**:
 

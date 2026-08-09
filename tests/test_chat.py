@@ -54,6 +54,69 @@ def test_encode_chat_example_masks_non_assistant_turns_and_supervises_assistant_
     assert all(token_id == pad_id for token_id in input_ids[assistant_end + 1 :])
 
 
+def test_encode_chat_example_supervises_all_assistant_turns_in_multi_turn_conversation():
+    # Key design decision from the SFT design spec: every assistant turn in a
+    # multi-turn conversation is supervised, not just the last one.
+    tokenizer = _tiny_tokenizer()
+    pad_id = tokenizer.token_to_id(PAD_TOKEN)
+    messages = [
+        {"role": "user", "content": "hi there"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "hi there"},
+        {"role": "assistant", "content": "hello"},
+    ]
+    max_seq_len = 128
+
+    input_ids, labels = encode_chat_example(tokenizer, messages, pad_id, max_seq_len)
+
+    user_ids = tokenizer.encode(format_turn("user", "hi there")).ids
+    assistant_ids = tokenizer.encode(format_turn("assistant", "hello")).ids
+
+    # Turn 1: user (masked)
+    turn1_start = 0
+    turn1_end = turn1_start + len(user_ids)
+    assert input_ids[turn1_start:turn1_end] == user_ids
+    assert labels[turn1_start:turn1_end] == [IGNORE_INDEX] * len(user_ids)
+
+    # Turn 2: assistant (supervised) + spliced pad_id (supervised)
+    turn2_start = turn1_end
+    turn2_end = turn2_start + len(assistant_ids)
+    assert input_ids[turn2_start:turn2_end] == assistant_ids
+    assert labels[turn2_start:turn2_end] == assistant_ids
+    pad1_idx = turn2_end
+    assert input_ids[pad1_idx] == pad_id
+    assert labels[pad1_idx] == pad_id
+
+    # Turn 3: user (masked)
+    turn3_start = pad1_idx + 1
+    turn3_end = turn3_start + len(user_ids)
+    assert input_ids[turn3_start:turn3_end] == user_ids
+    assert labels[turn3_start:turn3_end] == [IGNORE_INDEX] * len(user_ids)
+
+    # Turn 4: assistant (supervised) + spliced pad_id (supervised)
+    turn4_start = turn3_end
+    turn4_end = turn4_start + len(assistant_ids)
+    assert input_ids[turn4_start:turn4_end] == assistant_ids
+    assert labels[turn4_start:turn4_end] == assistant_ids
+    pad2_idx = turn4_end
+    assert input_ids[pad2_idx] == pad_id
+    assert labels[pad2_idx] == pad_id
+
+    # Exactly two spliced pad_id tokens (one after each assistant turn), both supervised.
+    spliced_pad_positions = [pad1_idx, pad2_idx]
+    assert len(spliced_pad_positions) == 2
+    for pos in spliced_pad_positions:
+        assert input_ids[pos] == pad_id
+        assert labels[pos] == pad_id
+
+    # Both assistant turns produce real-token-id labels (no IGNORE_INDEX inside them).
+    assert IGNORE_INDEX not in labels[turn2_start:turn2_end]
+    assert IGNORE_INDEX not in labels[turn4_start:turn4_end]
+    # Both user turns are fully masked.
+    assert all(label == IGNORE_INDEX for label in labels[turn1_start:turn1_end])
+    assert all(label == IGNORE_INDEX for label in labels[turn3_start:turn3_end])
+
+
 def test_encode_chat_example_truncates_to_exactly_max_seq_len():
     tokenizer = _tiny_tokenizer()
     pad_id = tokenizer.token_to_id(PAD_TOKEN)

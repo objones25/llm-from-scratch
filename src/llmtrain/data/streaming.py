@@ -1,7 +1,14 @@
+import itertools
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from datasets import IterableDataset, load_dataset
+
+# Native val splits (e.g. smoltalk's 54.9K-row `test` split) are capped at this many
+# examples when materialized, matching the val_holdout_examples convention used by the
+# carve path below — otherwise a large native split gets fully materialized and fully
+# re-evaluated every eval_interval steps, a real recurring GPU-time cost at real scale.
+NATIVE_VAL_SPLIT_CAP = 1000
 
 
 @dataclass(frozen=True)
@@ -69,7 +76,7 @@ def load_streaming_datasets(
         val_dataset = load_fn(spec.path, name=spec.name, split=spec.val_split, streaming=True)
         if spec.text_column != "text" and spec.messages_column is None:
             val_dataset = val_dataset.rename_column(spec.text_column, "text")
-        return shuffled, list(val_dataset)
+        return shuffled, list(itertools.islice(val_dataset, NATIVE_VAL_SPLIT_CAP))
 
     # Materialized (not left lazy via .take()) because .take()/.skip() on the same
     # `shuffled` object share its underlying _BaseExamplesIterable — iterating the val

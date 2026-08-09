@@ -495,15 +495,21 @@ current defaults rather than trusting this list to stay in sync):
 `train.py`:
 
 ```text
---dataset {tiny_shakespeare,reformer_enwik8,fineweb_edu}
+--dataset {tiny_shakespeare,reformer_enwik8,fineweb_edu,smoltalk,no_robots}
 --shuffle-buffer-size, --max-seq-len, --tokenizer-vocab-size, --tokenizer-sample-size
 --d-model, --n-layers, --n-heads, --n-kv-heads, --dropout, --rope-theta
 --max-steps, --batch-size, --gradient-accumulation-steps, --grad-clip
 --lr, --min-lr, --warmup-steps, --weight-decay, --beta1, --beta2, --seed
 --checkpoint-dir, --checkpoint-interval, --keep-last-n-checkpoints, --eval-interval
 --compile/--no-compile, --use-amp/--no-use-amp, --use-fused-ce/--no-use-fused-ce
---wandb-project, --wandb-mode {online,offline,disabled}, --log-file, --resume
+--wandb-project, --wandb-mode {online,offline,disabled}, --log-file
+--resume, --init-from-checkpoint, --tokenizer-path
 ```
+
+`smoltalk`/`no_robots` (chat datasets, SFT) require either `--init-from-checkpoint` or
+`--resume` — `main()` rejects them otherwise. `--tokenizer-path` requires
+`--init-from-checkpoint`. See CLAUDE.md's architecture section for the `--resume` /
+`--init-from-checkpoint` architecture-mismatch and `max_seq_len` footguns.
 
 `generate.py`:
 

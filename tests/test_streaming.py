@@ -214,6 +214,26 @@ def test_no_robots_registry_entry_uses_messages_column_and_native_val_split():
     assert spec.val_holdout_examples is None
 
 
+def test_load_streaming_datasets_caps_native_val_split_at_1000_examples(monkeypatch):
+    # Regression test for a real recurring GPU-time cost: smoltalk's native `test` split
+    # is 54.9K rows, and without a cap it gets fully materialized and fully re-evaluated
+    # every eval_interval steps. Uses 1500 fake rows (> the 1000 cap) to prove truncation.
+    def _fake_load_dataset_by_split(path, name, split, streaming):
+        texts = [f"{split}-example-{i}" for i in range(1500)]
+        return Dataset.from_dict({"text": texts}).to_iterable_dataset(num_shards=1)
+
+    monkeypatch.setitem(
+        DATASET_REGISTRY,
+        "native_large_test",
+        DatasetSpec(path="x", name=None, split="train", val_split="validation"),
+    )
+    _train_dataset, val_dataset = load_streaming_datasets(
+        "native_large_test", seed=42, buffer_size=5, load_fn=_fake_load_dataset_by_split
+    )
+
+    assert len(val_dataset) == 1000
+
+
 def test_load_streaming_datasets_skips_rename_when_messages_column_is_set(monkeypatch):
     def _fake_chat_load_dataset(path, name, split, streaming):
         return Dataset.from_dict(

@@ -234,7 +234,7 @@ def train(
             overrides = find_model_config_overrides(model_cfg, saved_model_config)
             if overrides:
                 logger.warning(
-                    "model architecture flags disagree with checkpoint %s; the "
+                    "effective model architecture differs from checkpoint %s's; the "
                     "checkpoint's values win: %s",
                     init_from_checkpoint,
                     overrides,
@@ -244,6 +244,7 @@ def train(
             )
         else:
             model_cfg.vocab_size = tokenizer.get_vocab_size()
+        del raw_checkpoint
     else:
         tokenizer = load_or_train_tokenizer(resume_path, train_dataset, data_cfg)
         model_cfg.vocab_size = tokenizer.get_vocab_size()
@@ -297,8 +298,9 @@ def train(
     # val_dataset is a plain list[dict] (materialized by load_streaming_datasets to avoid
     # sharing mutable streaming state with train_dataset) — a valid map-style dataset at
     # runtime (any Sequence with __getitem__/__len__ works), but list isn't a subtype of
-    # the Dataset[T] the stub declares, hence the ignore.
-    val_dataloader: DataLoader[dict] = DataLoader(
+    # the Dataset[T] the stub declares, hence the ignore. The DataLoader itself yields
+    # (input_ids, labels) tuples once collate_fn runs, not the raw dict rows.
+    val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
         val_dataset,  # type: ignore[arg-type]  # list[dict] is a valid map-style dataset at runtime but isn't Dataset[T]
         batch_size=train_cfg.batch_size,
         pin_memory=True,
@@ -492,6 +494,19 @@ def main() -> None:
     resume_group.add_argument("--init-from-checkpoint", type=str, default=None)
     parser.add_argument("--tokenizer-path", type=str, default=None)
     args = parser.parse_args()
+
+    if args.tokenizer_path and not args.init_from_checkpoint:
+        parser.error("--tokenizer-path requires --init-from-checkpoint")
+    if (
+        DATASET_REGISTRY[args.dataset].messages_column is not None
+        and not args.init_from_checkpoint
+        and not args.resume
+    ):
+        parser.error(
+            f"--dataset {args.dataset} is a chat dataset; chat datasets require "
+            "--init-from-checkpoint (SFT always starts from a pretrained checkpoint) "
+            "or --resume"
+        )
 
     data_cfg, model_cfg, train_cfg = build_configs_from_args(args)
     train(
