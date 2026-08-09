@@ -19,6 +19,7 @@ from llmtrain.data.streaming import DATASET_REGISTRY, load_streaming_datasets
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
 from llmtrain.model.transformer import TransformerLM
+from llmtrain.s3 import resolve_local_path, sibling_path
 from llmtrain.training.checkpoint import load_checkpoint, prune_old_checkpoints, save_checkpoint
 from llmtrain.training.config import DataConfig, ModelConfig, TrainConfig
 
@@ -184,11 +185,23 @@ def train_step(
     return accumulated_loss, total_norm.item(), lr
 
 
+def find_model_config_overrides(
+    model_cfg: ModelConfig, saved_model_config: dict
+) -> dict[str, tuple[object, object]]:
+    return {
+        field: (getattr(model_cfg, field), saved_model_config[field])
+        for field in saved_model_config
+        if field != "vocab_size" and getattr(model_cfg, field) != saved_model_config[field]
+    }
+
+
 def train(
     data_cfg: DataConfig,
     model_cfg: ModelConfig,
     train_cfg: TrainConfig,
     resume_path: str | None = None,
+    init_from_checkpoint: str | None = None,
+    tokenizer_path: str | None = None,
 ) -> None:
     configure_logging(log_file=train_cfg.log_file)
     # Must be set before any CUDA allocation happens (the allocator reads it lazily on
@@ -207,8 +220,33 @@ def train(
         seed=train_cfg.seed,
         buffer_size=data_cfg.shuffle_buffer_size,
     )
-    tokenizer = load_or_train_tokenizer(resume_path, train_dataset, data_cfg)
-    model_cfg.vocab_size = tokenizer.get_vocab_size()
+    init_checkpoint_path: Path | None = None
+    if init_from_checkpoint is not None:
+        # SFT always starts from pretrained weights with a fresh tokenizer loaded from
+        # disk, never a freshly retrained one over smoltalk/no_robots text — the SFT run
+        # must use the exact tokenizer the pretrained embeddings were trained with.
+        init_checkpoint_path = resolve_local_path(init_from_checkpoint)
+        tokenizer_uri = tokenizer_path or sibling_path(init_from_checkpoint, "tokenizer.json")
+        tokenizer = Tokenizer.from_file(str(resolve_local_path(tokenizer_uri)))
+        raw_checkpoint = torch.load(init_checkpoint_path, map_location="cpu")
+        saved_model_config = raw_checkpoint.get("model_config")
+        if saved_model_config is not None:
+            overrides = find_model_config_overrides(model_cfg, saved_model_config)
+            if overrides:
+                logger.warning(
+                    "model architecture flags disagree with checkpoint %s; the "
+                    "checkpoint's values win: %s",
+                    init_from_checkpoint,
+                    overrides,
+                )
+            model_cfg = ModelConfig(
+                **{**saved_model_config, "vocab_size": tokenizer.get_vocab_size()}
+            )
+        else:
+            model_cfg.vocab_size = tokenizer.get_vocab_size()
+    else:
+        tokenizer = load_or_train_tokenizer(resume_path, train_dataset, data_cfg)
+        model_cfg.vocab_size = tokenizer.get_vocab_size()
 
     model: torch.nn.Module = TransformerLM(model_cfg).to(device)
     if device.type == "cuda" and train_cfg.compile:
@@ -233,7 +271,11 @@ def train(
     )
 
     step = 0
-    if resume_path is not None:
+    if init_from_checkpoint is not None:
+        assert init_checkpoint_path is not None
+        load_checkpoint(init_checkpoint_path, model, optimizer=None)
+        logger.info("initialized weights from checkpoint %s", init_from_checkpoint)
+    elif resume_path is not None:
         # Training reconstructs the model from the current model_cfg, not the checkpoint's
         # persisted config — the returned model_config is only used by generate.py, which
         # rebuilds the model from scratch at inference time.
@@ -389,7 +431,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train the toy LLM")
     parser.add_argument(
         "--dataset",
-        choices=["tiny_shakespeare", "reformer_enwik8", "fineweb_edu"],
+        choices=["tiny_shakespeare", "reformer_enwik8", "fineweb_edu", "smoltalk", "no_robots"],
         default=DataConfig.dataset_name,
     )
     parser.add_argument("--shuffle-buffer-size", type=int, default=DataConfig.shuffle_buffer_size)
@@ -445,11 +487,21 @@ def main() -> None:
         default=TrainConfig.wandb_mode,
     )
     parser.add_argument("--log-file", type=str, default=TrainConfig.log_file)
-    parser.add_argument("--resume", type=str, default=None)
+    resume_group = parser.add_mutually_exclusive_group()
+    resume_group.add_argument("--resume", type=str, default=None)
+    resume_group.add_argument("--init-from-checkpoint", type=str, default=None)
+    parser.add_argument("--tokenizer-path", type=str, default=None)
     args = parser.parse_args()
 
     data_cfg, model_cfg, train_cfg = build_configs_from_args(args)
-    train(data_cfg, model_cfg, train_cfg, resume_path=args.resume)
+    train(
+        data_cfg,
+        model_cfg,
+        train_cfg,
+        resume_path=args.resume,
+        init_from_checkpoint=args.init_from_checkpoint,
+        tokenizer_path=args.tokenizer_path,
+    )
 
 
 if __name__ == "__main__":

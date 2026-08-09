@@ -1,5 +1,6 @@
 import argparse
 import math
+from dataclasses import asdict
 
 import pytest
 import torch
@@ -13,6 +14,7 @@ from llmtrain.training.train import (
     collect_micro_batches,
     compute_loss,
     evaluate,
+    find_model_config_overrides,
     get_lr,
     load_or_train_tokenizer,
     make_collate_fn,
@@ -368,3 +370,19 @@ def test_load_or_train_tokenizer_falls_back_when_resuming_without_a_saved_tokeni
     tokenizer = load_or_train_tokenizer(resume_path, train_dataset, data_cfg)
 
     assert tokenizer.get_vocab_size() > 0
+
+
+def test_find_model_config_overrides_returns_empty_when_configs_match():
+    model_cfg = ModelConfig(d_model=64, n_layers=4)
+    saved = asdict(model_cfg)
+
+    assert find_model_config_overrides(model_cfg, saved) == {}
+
+
+def test_find_model_config_overrides_reports_mismatched_fields_excluding_vocab_size():
+    model_cfg = ModelConfig(d_model=64, n_layers=4, vocab_size=999)
+    saved = asdict(ModelConfig(d_model=128, n_layers=4, vocab_size=32768))
+
+    overrides = find_model_config_overrides(model_cfg, saved)
+
+    assert overrides == {"d_model": (64, 128)}
