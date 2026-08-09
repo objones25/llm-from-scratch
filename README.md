@@ -17,7 +17,7 @@ the real pretraining run happens on a rented RunPod A100 GPU.
 - **RMSNorm** pre-normalization (`nn.RMSNorm`) around attention and MLP sublayers.
 - **SwiGLU** MLP (`silu(w_gate(x)) * w_up(x)` fed through `w_down`), the LLaMA-style gated
   feed-forward, with the hidden dimension set to `2/3 * 4 * d_model`.
-- **Grouped-query attention (GQA)**: separate `n_heads`/`n_kv_heads` (12/4 by default, a 3:1
+- **Grouped-query attention (GQA)**: separate `n_heads`/`n_kv_heads` (16/4 by default, a 4:1
   ratio) via `F.scaled_dot_product_attention(..., enable_gqa=True)`.
 - **Weight-tied embeddings/head** — the output projection shares its weight tensor with the
   input token embedding (`self.head.weight = self.token_emb.weight`).
@@ -34,8 +34,9 @@ the real pretraining run happens on a rented RunPod A100 GPU.
   (`--tokenizer-sample-size`, default 200 examples) drawn from the streaming dataset itself —
   there's no pre-shipped tokenizer artifact; `tokenizer.json` is saved next to the checkpoints.
 
-At the default config (`d_model=768`, `n_layers=12`, `n_heads=12`, `n_kv_heads=4`,
-`vocab_size=32768`, `max_seq_len=2048`) the model is roughly 125M parameters.
+At the default config (`d_model=1024`, `n_layers=20`, `n_heads=16`, `n_kv_heads=4`,
+`vocab_size=32768`, `max_seq_len=2048`) the model is 253.8M parameters (220.2M
+non-embedding).
 
 ## Requirements
 
@@ -182,8 +183,8 @@ validated by the manual smoke test described above and in
   than the default shuffle buffer (1000), and `datasets` discards the shuffle buffer's
   contents on `load_state_dict`, so the resumed stream comes up empty with no error raised.
   `--resume` works correctly on real-scale datasets (`reformer_enwik8`, `fineweb_edu`).
-- **Checkpoints are large even at smoke-test scale.** At the default 125M-parameter
-  architecture, each `step_N.pt` is roughly 1.0GB (model + optimizer state), regardless of
+- **Checkpoints are large even at smoke-test scale.** At the default 253.8M-parameter
+  architecture, each `step_N.pt` is roughly 3.05GB (model + optimizer state), regardless of
   how few training steps produced it. `--keep-last-n-checkpoints` prunes old ones, but disk
   usage during a run should be planned for accordingly.
 - **Short runs produce garbled output.** A few dozen steps on a few hundred training rows,
