@@ -162,7 +162,7 @@ to match, not the other way around:
 
 1. RunPod console → **Storage** → **New Network Volume**.
 2. Pick a data center, give it a name, and size it generously above what `--keep-last-n-checkpoints`
-   × ~1GB actually needs (see Part 3's cost-awareness note) — network volumes are billed for
+   × ~3GB actually needs (see Part 3's cost-awareness note) — network volumes are billed for
    their provisioned size regardless of how much is actually used, and resizing later means
    picking a size you won't need to revisit mid-run.
 
