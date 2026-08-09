@@ -119,7 +119,7 @@ to accommodate the new checkpoint size before the run starts (user action via th
 console). Pretraining alone peaks at ~12.2GB, but Part 4's SFT runs afterward add their own
 checkpoints on top of that while `step_10500.pt` must remain on the volume — realistic peak
 usage across pretraining plus both SFT stages, if nothing is cleaned up in between, is closer
-to ~24GB, so a resize to roughly 30GB (or cleaning up older pretraining checkpoints before
+to ~27.4GB, so a resize to roughly 30GB (or cleaning up older pretraining checkpoints before
 starting SFT) is the safer target, not 20GB. The old run's `checkpoints/step_10000.pt` and
 its `tokenizer.json` have already been archived locally (verified via SHA-256 match against
 the `resolve_local_path()` cache copy) and can be deleted from the volume to reclaim space

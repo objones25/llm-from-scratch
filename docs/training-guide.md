@@ -331,7 +331,7 @@ writes the new file before `prune_old_checkpoints()` deletes the oldest, so at t
 (~12.2GB)** for pretraining alone. Part 4's SFT runs afterward add their own checkpoints on
 top of that while `step_10500.pt` still needs to stay on the volume (`--init-from-checkpoint`
 reads it) — realistic peak usage across pretraining plus both SFT stages, if you don't clean
-anything up in between, is closer to **~24GB** (12.2GB pretraining peak + ~3GB `no_robots`
+anything up in between, is closer to **~27.4GB** (12.2GB pretraining peak + ~3GB `no_robots`
 checkpoints + ~12.2GB `smoltalk` peak). Your network volume needs to be resized to comfortably
 clear that — **resize it to at least 30GB** (RunPod console → Storage → your volume → resize;
 this generally requires stopping the pod first) before launching the command above, or delete
