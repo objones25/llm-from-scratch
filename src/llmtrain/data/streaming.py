@@ -12,6 +12,7 @@ class DatasetSpec:
     text_column: str = "text"
     val_split: str | None = None
     val_holdout_examples: int | None = None
+    messages_column: str | None = None
 
     def __post_init__(self) -> None:
         if (self.val_split is None) == (self.val_holdout_examples is None):
@@ -35,6 +36,20 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
         split="train",
         val_holdout_examples=1000,
     ),
+    "smoltalk": DatasetSpec(
+        path="HuggingFaceTB/smoltalk",
+        name="all",
+        split="train",
+        messages_column="messages",
+        val_split="test",
+    ),
+    "no_robots": DatasetSpec(
+        path="HuggingFaceH4/no_robots",
+        name="default",
+        split="train",
+        messages_column="messages",
+        val_split="test",
+    ),
 }
 
 
@@ -46,13 +61,13 @@ def load_streaming_datasets(
 ) -> tuple[IterableDataset, list[dict]]:
     spec = DATASET_REGISTRY[dataset_name]
     dataset = load_fn(spec.path, name=spec.name, split=spec.split, streaming=True)
-    if spec.text_column != "text":
+    if spec.text_column != "text" and spec.messages_column is None:
         dataset = dataset.rename_column(spec.text_column, "text")
     shuffled = dataset.shuffle(seed=seed, buffer_size=buffer_size)
 
     if spec.val_split is not None:
         val_dataset = load_fn(spec.path, name=spec.name, split=spec.val_split, streaming=True)
-        if spec.text_column != "text":
+        if spec.text_column != "text" and spec.messages_column is None:
             val_dataset = val_dataset.rename_column(spec.text_column, "text")
         return shuffled, list(val_dataset)
 

@@ -189,3 +189,52 @@ def test_reformer_enwik8_and_fineweb_edu_registry_entries_carve_val_holdout():
         spec = DATASET_REGISTRY[name]
         assert spec.val_split is None
         assert spec.val_holdout_examples == 1000
+
+
+def test_dataset_spec_defaults_messages_column_to_none():
+    spec = DatasetSpec(path="x", name=None, split="train", val_split="test")
+    assert spec.messages_column is None
+
+
+def test_smoltalk_registry_entry_uses_messages_column_and_native_val_split():
+    spec = DATASET_REGISTRY["smoltalk"]
+    assert spec.path == "HuggingFaceTB/smoltalk"
+    assert spec.name == "all"
+    assert spec.messages_column == "messages"
+    assert spec.val_split == "test"
+    assert spec.val_holdout_examples is None
+
+
+def test_no_robots_registry_entry_uses_messages_column_and_native_val_split():
+    spec = DATASET_REGISTRY["no_robots"]
+    assert spec.path == "HuggingFaceH4/no_robots"
+    assert spec.name == "default"
+    assert spec.messages_column == "messages"
+    assert spec.val_split == "test"
+    assert spec.val_holdout_examples is None
+
+
+def test_load_streaming_datasets_skips_rename_when_messages_column_is_set(monkeypatch):
+    def _fake_chat_load_dataset(path, name, split, streaming):
+        return Dataset.from_dict(
+            {"messages": [[{"role": "user", "content": f"hi {i}"}] for i in range(10)]}
+        ).to_iterable_dataset(num_shards=1)
+
+    monkeypatch.setitem(
+        DATASET_REGISTRY,
+        "chat_test",
+        DatasetSpec(
+            path="x",
+            name=None,
+            split="train",
+            text_column="Text",  # would normally trigger rename_column("Text", "text")
+            messages_column="messages",
+            val_split="train",
+        ),
+    )
+    train_dataset, _val_dataset = load_streaming_datasets(
+        "chat_test", seed=42, buffer_size=5, load_fn=_fake_chat_load_dataset
+    )
+
+    examples = list(train_dataset)
+    assert all("messages" in example for example in examples)
