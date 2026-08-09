@@ -9,6 +9,7 @@ __pycache__/
 credentials.txt
 checkpoints/
 checkpoints-downloaded/
+plots/
 app.log*
 wandb/
 .DS_Store

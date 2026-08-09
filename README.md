@@ -31,7 +31,7 @@ the real pretraining run happens on a rented RunPod A100 GPU.
   actually used on CUDA (`use_fused_ce and device.type == "cuda"`); on MPS/CPU training always
   falls back to a plain `F.cross_entropy` over the full logits.
 - **Byte-level BPE tokenizer**, trained fresh at the start of every run from a small sample
-  (`--tokenizer-sample-size`, default 200 examples) drawn from the streaming dataset itself —
+  (`--tokenizer-sample-size`, default 10000 examples) drawn from the streaming dataset itself —
   there's no pre-shipped tokenizer artifact; `tokenizer.json` is saved next to the checkpoints.
 
 At the default config (`d_model=1024`, `n_layers=20`, `n_heads=16`, `n_kv_heads=4`,

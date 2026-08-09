@@ -46,7 +46,7 @@ params, D = tokens) and the project's own measured throughput (175K tokens/sec, 
 ~79.3 TFLOPS achieved on the rented A100 at the current model size):
 
 - Current run's total compute: `6 × 75.5M × 5.24B ≈ 2.37×10¹⁸ FLOPs`. This is already
-  ~52 tokens/non-embedding-param (D/N) — well past the ~20 tokens/param Chinchilla-optimal
+  ~69 tokens/non-embedding-param (D/N) — well past the ~20 tokens/param Chinchilla-optimal
   ratio (Hoffmann et al., 2022, "Training Compute-Optimal Large Language Models"), and
   already a deliberate choice per `docs/superpowers/specs/2026-08-06-pretraining-loop-hardening-design.md`
   (the "overtrain a small model for inference quality" approach LLaMA popularized).

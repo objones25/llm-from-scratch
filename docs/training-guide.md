@@ -77,11 +77,15 @@ with `--keep-last-n-checkpoints 2`, `step_10.pt` was deleted once `step_30.pt` w
 leaving only `step_20.pt` and `step_30.pt` in `/tmp/smoke-test`.
 
 **Important caveat about this run**: no `--d-model`/`--n-layers`/etc. override was passed, so
-this ran the full default 253.8M-parameter architecture (`ModelConfig` defaults —
-`d_model=1024`, `n_layers=20`, `n_heads=16`, `n_kv_heads=4`). That's the architecture the real
-pretraining run uses, which is exactly why it's a meaningful smoke test — but it's slow on
-Mac CPU/MPS (tens of seconds per optimizer step) and produces roughly 3GB checkpoint files
-even at 30 steps. If you just want to confirm the pipeline runs end to end without waiting or
+this ran the full default architecture at the time this transcript was captured — 100.7M
+params (`d_model=768`, `n_layers=12`, `n_heads=12`, `n_kv_heads=4`), which is what produced
+the exact `val_loss` numbers above. The default architecture is now the larger 253.8M-param
+one (`d_model=1024`, `n_layers=20`, `n_heads=16`, `n_kv_heads=4`) used by the real pretraining
+run — re-running this exact command today exercises that architecture instead, so expect
+different absolute `val_loss` values and roughly 3GB checkpoint files (not the ~1GB this
+original transcript produced) even at 30 steps. Either way it's slow on Mac CPU/MPS (tens of
+seconds per optimizer step); the decreasing trend is still the signal to look for, not the
+specific numbers. If you just want to confirm the pipeline runs end to end without waiting or
 burning disk, override the architecture down, e.g.:
 
 ```bash
@@ -306,7 +310,7 @@ At the defaults (`max_steps=10500`, `batch_size=32`, `gradient_accumulation_step
 analysis of the previous run's plateauing loss curve (100.7M params, 5.24B tokens, val_loss
 dropping 0.588 in its first 500 steps vs. only 0.005 in its last 500) — see
 `docs/superpowers/specs/2026-08-09-model-scale-up-design.md` for the full reasoning. In
-short: that run was already well past its own compute-optimal token count (~52
+short: that run was already well past its own compute-optimal token count (~69
 tokens/non-embedding-param vs. Chinchilla's ~20), so the extra compute this run spends goes
 mostly into a bigger model (220.2M non-embedding params, up from 75.5M) with a token count
 (~5.51B) close to *this* model's own ~4.9B-token optimum — deliberately a bit past it,
@@ -324,9 +328,15 @@ confirmed against the previous run's checkpoint sizes. At 253,756,416 params, ea
 `step_N.pt` is **~3.05GB**, not the ~1.2GB of the previous architecture. `save_checkpoint()`
 writes the new file before `prune_old_checkpoints()` deletes the oldest, so at the default
 `--keep-last-n-checkpoints 3` there's a brief window with **4 checkpoints resident at once
-(~12.2GB)**. Your network volume needs to be resized to comfortably clear that — **resize it
-to at least 20GB** (RunPod console → Storage → your volume → resize; this generally requires
-stopping the pod first) before launching the command above.
+(~12.2GB)** for pretraining alone. Part 4's SFT runs afterward add their own checkpoints on
+top of that while `step_10500.pt` still needs to stay on the volume (`--init-from-checkpoint`
+reads it) — realistic peak usage across pretraining plus both SFT stages, if you don't clean
+anything up in between, is closer to **~24GB** (12.2GB pretraining peak + ~3GB `no_robots`
+checkpoints + ~12.2GB `smoltalk` peak). Your network volume needs to be resized to comfortably
+clear that — **resize it to at least 30GB** (RunPod console → Storage → your volume → resize;
+this generally requires stopping the pod first) before launching the command above, or delete
+the older pretraining checkpoints (keeping only `step_10500.pt`) before starting Part 4 if
+you'd rather stay closer to 20GB.
 
 Free up space on the volume first by deleting the previous run's checkpoints — they're
 already archived locally and verified (`~/Downloads/step_10000.pt` matches the SHA-256 of
@@ -365,15 +375,20 @@ Small, fast dataset — proves the SFT pipeline works before committing to the l
 run below. Points at the pretraining run's final checkpoint, `step_10500.pt`:
 
 ```bash
-uv run --env-file .env python -m llmtrain.training.train \
+nohup uv run --env-file .env python -m llmtrain.training.train \
   --dataset no_robots \
   --init-from-checkpoint /workspace/checkpoints/step_10500.pt \
   --checkpoint-dir /workspace/sft-checkpoints \
   --max-seq-len 2048 \
   --lr 3e-5 --min-lr 3e-6 --warmup-steps 20 \
   --max-steps 150 \
-  --wandb-project llm-training
+  --wandb-project llm-training \
+  > /root/train_sft_no_robots.log 2>&1 &
+disown
 ```
+
+(same `nohup ... & disown` pattern as pretraining — see Part 6's "dropped SSH connection"
+entry. Tail `/root/train_sft_no_robots.log` or check the W&B dashboard.)
 
 - Architecture flags don't need to be passed — `--init-from-checkpoint` auto-adopts them
   from the checkpoint's persisted `model_config`.
@@ -394,24 +409,33 @@ output above — the sanity check only proves the pipeline works, it isn't a ste
 A separate `--checkpoint-dir` keeps the two SFT runs from colliding:
 
 ```bash
-uv run --env-file .env python -m llmtrain.training.train \
+nohup uv run --env-file .env python -m llmtrain.training.train \
   --dataset smoltalk \
   --init-from-checkpoint /workspace/checkpoints/step_10500.pt \
   --checkpoint-dir /workspace/sft-checkpoints-smoltalk \
   --max-seq-len 2048 \
   --lr 3e-5 --min-lr 3e-6 --warmup-steps 300 \
   --max-steps 12000 \
-  --wandb-project llm-training
+  --wandb-project llm-training \
+  > /root/train_sft_smoltalk.log 2>&1 &
+disown
 ```
+
+(same `nohup ... & disown` pattern as pretraining. Tail `/root/train_sft_smoltalk.log` or
+check the W&B dashboard.)
 
 - `smoltalk`'s `all` config has ~1.0M train rows; at the default effective batch size (256),
   one epoch is ~3900 steps. `--max-steps 12000` (~3 epochs) is a starting point based on
   typical SFT recipes, not a value tuned against this specific model — watch `val_loss` on
-  the W&B dashboard and stop the run manually (`Ctrl-C`) whenever it plateaus or you've seen
-  enough, rather than treating 12000 as a number you must reach. `--checkpoint-interval`
+  the W&B dashboard and stop the run manually whenever it plateaus or you've seen enough,
+  rather than treating 12000 as a number you must reach. Since this runs detached via
+  `nohup ... & disown`, stop it with `pgrep -f 'dataset smoltalk'` to find its PID, then
+  `kill <pid>` — not `Ctrl-C`, which only works on a foreground process. `--checkpoint-interval`
   (default 125) means there's always a recent checkpoint to grab whenever you decide to stop.
-- `--warmup-steps 300` scales up proportionally from the `no_robots` run's 20 (same warmup
-  fraction of total steps).
+- `--warmup-steps 300` is a larger absolute warmup for a much longer run — about 2.5% of
+  `smoltalk`'s 12,000 steps (vs. `no_robots`' 20/150 = 13.3%); shorter runs typically warm up
+  over a larger fraction of total steps, so this isn't a literal 1:1 scale-up of the
+  `no_robots` value, just proportionate to standard SFT practice.
 
 ### 3. Pull a checkpoint down for evaluation
 
