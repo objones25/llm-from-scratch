@@ -3,6 +3,7 @@ import argparse
 import torch
 from tokenizers import Tokenizer
 
+from llmtrain.data.tokenizer import PAD_TOKEN
 from llmtrain.model.cache import KVCache
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.s3 import resolve_local_path, sibling_path
@@ -87,6 +88,7 @@ def generate_token_ids(
     try:
         device = next(model.parameters()).device
         input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+        pad_id = tokenizer.token_to_id(PAD_TOKEN)
 
         cache = KVCache()
         generated_ids = list(prompt_ids)
@@ -104,12 +106,15 @@ def generate_token_ids(
         with torch.no_grad():
             logits = model(input_ids, cache=cache)
             next_id = sample_next(logits[:, -1, :])
-            generated_ids.append(next_id)
-            for _ in range(config.max_new_tokens - 1):
-                step_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
-                logits = model(step_input, cache=cache)
-                next_id = sample_next(logits[:, -1, :])
+            if next_id != pad_id:
                 generated_ids.append(next_id)
+                for _ in range(config.max_new_tokens - 1):
+                    step_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
+                    logits = model(step_input, cache=cache)
+                    next_id = sample_next(logits[:, -1, :])
+                    if next_id == pad_id:
+                        break
+                    generated_ids.append(next_id)
     finally:
         model.train(was_training)
 

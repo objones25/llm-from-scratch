@@ -172,3 +172,40 @@ def test_generate_works_after_checkpoint_and_tokenizer_round_trip(tmp_path):
         loaded_model, loaded_tokenizer, "hello", GenerationConfig(max_new_tokens=3, temperature=0.0)
     )
     assert isinstance(output, str)
+
+
+class _StopsAtPadModel(torch.nn.Module):
+    """Always emits pad_id as position N's argmax, real tokens elsewhere."""
+
+    def __init__(self, vocab_size: int, pad_id: int, stop_at: int):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.pad_id = pad_id
+        self.stop_at = stop_at
+        self.calls = 0
+        self._unused = torch.nn.Parameter(torch.zeros(1))
+
+    def forward(self, input_ids, cache=None):
+        batch_size, seq_len = input_ids.shape
+        logits = torch.full((batch_size, seq_len, self.vocab_size), -10.0)
+        chosen_id = self.pad_id if self.calls >= self.stop_at else 0
+        logits[:, -1, chosen_id] = 10.0
+        self.calls += 1
+        return logits
+
+    def parameters(self, recurse=True):
+        return iter([self._unused])
+
+
+def test_generate_token_ids_stops_at_pad_token_and_does_not_append_it():
+    tokenizer = train_tokenizer(["hello world", "hello there"], vocab_size=32)
+    pad_id = tokenizer.token_to_id("[PAD]")
+    model = _StopsAtPadModel(vocab_size=tokenizer.get_vocab_size(), pad_id=pad_id, stop_at=2)
+    prompt_ids = tokenizer.encode("hello").ids
+
+    output_ids = generate_token_ids(
+        model, tokenizer, "hello", GenerationConfig(max_new_tokens=5, temperature=0.0)
+    )
+
+    assert len(output_ids) == len(prompt_ids) + 2
+    assert pad_id not in output_ids
