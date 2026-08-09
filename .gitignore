@@ -11,3 +11,4 @@ checkpoints/
 app.log*
 wandb/
 .DS_Store
+.worktrees/
