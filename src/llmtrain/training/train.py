@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
+from datasets import IterableDataset
 from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
@@ -92,6 +93,25 @@ def make_collate_fn(tokenizer: Tokenizer, max_seq_len: int) -> Callable[[list[di
     return collate
 
 
+def load_or_train_tokenizer(
+    resume_path: str | None, train_dataset: IterableDataset, data_cfg: DataConfig
+) -> Tokenizer:
+    if resume_path is not None:
+        tokenizer_path = Path(resume_path).parent / "tokenizer.json"
+        if tokenizer_path.exists():
+            logger.info("loaded tokenizer from %s", tokenizer_path)
+            return Tokenizer.from_file(str(tokenizer_path))
+        logger.warning(
+            "no tokenizer.json next to checkpoint %s; regenerating from the dataset "
+            "stream instead of loading it",
+            resume_path,
+        )
+    sample_texts = [
+        example["text"] for example in train_dataset.take(data_cfg.tokenizer_sample_size)
+    ]
+    return train_tokenizer(sample_texts, vocab_size=data_cfg.tokenizer_vocab_size)
+
+
 def get_lr(step: int, train_cfg: TrainConfig) -> float:
     # Linear warmup then cosine decay to min_lr (nanoGPT-style). Pure function of `step`,
     # so resuming from a checkpoint needs no separate scheduler state to persist.
@@ -175,10 +195,7 @@ def train(
         seed=train_cfg.seed,
         buffer_size=data_cfg.shuffle_buffer_size,
     )
-    sample_texts = [
-        example["text"] for example in train_dataset.take(data_cfg.tokenizer_sample_size)
-    ]
-    tokenizer = train_tokenizer(sample_texts, vocab_size=data_cfg.tokenizer_vocab_size)
+    tokenizer = load_or_train_tokenizer(resume_path, train_dataset, data_cfg)
     model_cfg.vocab_size = tokenizer.get_vocab_size()
 
     model: torch.nn.Module = TransformerLM(model_cfg).to(device)

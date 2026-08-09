@@ -3,6 +3,7 @@ import math
 
 import pytest
 import torch
+from datasets import Dataset
 
 from llmtrain.data.tokenizer import train_tokenizer
 from llmtrain.model.transformer import TransformerLM
@@ -13,11 +14,16 @@ from llmtrain.training.train import (
     compute_loss,
     evaluate,
     get_lr,
+    load_or_train_tokenizer,
     make_collate_fn,
     next_token_loss,
     select_device,
     train_step,
 )
+
+
+def _fake_train_dataset(texts: list[str]):
+    return Dataset.from_dict({"text": texts}).to_iterable_dataset(num_shards=1)
 
 
 def test_select_device_returns_a_torch_device():
@@ -293,3 +299,36 @@ def test_build_configs_from_args_maps_every_field_to_its_dataclass():
         wandb_mode="disabled",
         log_file="test.log",
     )
+
+
+def test_load_or_train_tokenizer_trains_fresh_when_not_resuming():
+    train_dataset = _fake_train_dataset(["hello world", "hello there", "the quick brown fox"])
+    data_cfg = DataConfig(tokenizer_vocab_size=50, tokenizer_sample_size=3)
+
+    tokenizer = load_or_train_tokenizer(None, train_dataset, data_cfg)
+
+    assert tokenizer.get_vocab_size() > 0
+
+
+def test_load_or_train_tokenizer_loads_saved_tokenizer_when_resuming(tmp_path):
+    texts = ["hello world", "hello there"]
+    train_dataset = _fake_train_dataset(texts)
+    data_cfg = DataConfig(tokenizer_vocab_size=50, tokenizer_sample_size=2)
+    saved_tokenizer = train_tokenizer(texts, vocab_size=50)
+    saved_tokenizer.save(str(tmp_path / "tokenizer.json"))
+    resume_path = str(tmp_path / "step_10.pt")
+
+    loaded = load_or_train_tokenizer(resume_path, train_dataset, data_cfg)
+
+    assert loaded.get_vocab() == saved_tokenizer.get_vocab()
+
+
+def test_load_or_train_tokenizer_falls_back_when_resuming_without_a_saved_tokenizer(tmp_path):
+    texts = ["hello world", "hello there", "the quick brown fox"]
+    train_dataset = _fake_train_dataset(texts)
+    data_cfg = DataConfig(tokenizer_vocab_size=50, tokenizer_sample_size=3)
+    resume_path = str(tmp_path / "step_10.pt")  # no tokenizer.json alongside it
+
+    tokenizer = load_or_train_tokenizer(resume_path, train_dataset, data_cfg)
+
+    assert tokenizer.get_vocab_size() > 0
