@@ -2,7 +2,7 @@ import argparse
 import logging
 import math
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict
 from pathlib import Path
 
@@ -102,6 +102,54 @@ def get_lr(step: int, train_cfg: TrainConfig) -> float:
     decay_ratio = (step - train_cfg.warmup_steps) / (train_cfg.max_steps - train_cfg.warmup_steps)
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return train_cfg.min_lr + coeff * (train_cfg.lr - train_cfg.min_lr)
+
+
+def collect_micro_batches(
+    dataloader: Iterable[torch.Tensor], data_iter: Iterator[torch.Tensor], n: int
+) -> tuple[list[torch.Tensor], Iterator[torch.Tensor]]:
+    # A dataloader smaller than n (e.g. tiny_shakespeare with a large
+    # --gradient-accumulation-steps) can wrap around more than once per call — each
+    # StopIteration starts a fresh epoch rather than raising past a bare `next()`.
+    batches = []
+    for _ in range(n):
+        try:
+            batch = next(data_iter)
+        except StopIteration:
+            data_iter = iter(dataloader)
+            batch = next(data_iter)
+        batches.append(batch)
+    return batches, data_iter
+
+
+def train_step(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    batches: list[torch.Tensor],
+    train_cfg: TrainConfig,
+    device: torch.device,
+    pad_id: int,
+    autocast_dtype: torch.dtype | None,
+    use_fused_ce: bool,
+    step: int,
+) -> tuple[float, float, float]:
+    accumulated_loss = 0.0
+    for batch in batches:
+        input_ids = batch.to(device, non_blocking=True)
+        with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp):
+            loss = compute_loss(model, input_ids, pad_id, use_fused_ce) / len(batches)
+        loss.backward()
+        accumulated_loss += loss.item()
+
+    total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
+
+    lr = get_lr(step, train_cfg)
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+
+    optimizer.step()
+    optimizer.zero_grad()
+
+    return accumulated_loss, total_norm.item(), lr
 
 
 def train(
@@ -208,82 +256,107 @@ def train(
 
     model.train()
     optimizer.zero_grad()
-    accumulated_loss = 0.0
-    micro_step = 0
     # A bare `for batch in dataloader` would stop as soon as the underlying stream is
     # exhausted, capping training at whatever step count one pass through the dataset
-    # happens to reach — silently ignoring the rest of --max-steps. Wrapping in this
-    # while re-iterates the dataset (a fresh epoch) whenever that happens. No-op for
-    # datasets large enough to never exhaust within a normal run (reformer_enwik8,
-    # fineweb_edu); this is what lets small datasets like tiny_shakespeare train for
-    # more than one epoch.
+    # happens to reach — silently ignoring the rest of --max-steps. collect_micro_batches
+    # re-iterates the dataset (a fresh epoch) whenever that happens. No-op for datasets
+    # large enough to never exhaust within a normal run (reformer_enwik8, fineweb_edu);
+    # this is what lets small datasets like tiny_shakespeare train for more than one epoch.
+    data_iter: Iterator[torch.Tensor] = iter(dataloader)
     while step < train_cfg.max_steps:
-        for batch in dataloader:
-            input_ids = batch.to(device, non_blocking=True)
-            with torch.autocast(
-                device_type=device.type, dtype=autocast_dtype, enabled=train_cfg.use_amp
-            ):
-                loss = (
-                    compute_loss(model, input_ids, pad_id, use_fused_ce_effective)
-                    / train_cfg.gradient_accumulation_steps
-                )
+        batches, data_iter = collect_micro_batches(
+            dataloader, data_iter, train_cfg.gradient_accumulation_steps
+        )
+        avg_loss, grad_norm, lr = train_step(
+            model,
+            optimizer,
+            batches,
+            train_cfg,
+            device,
+            pad_id,
+            autocast_dtype,
+            use_fused_ce_effective,
+            step,
+        )
 
-            loss.backward()
-            accumulated_loss += loss.item()
-            micro_step += 1
+        wandb.log({"loss": avg_loss, "lr": lr, "grad_norm": grad_norm}, step=step)
+        logger.debug("step %d complete", step, extra={"step": step})
 
-            if micro_step % train_cfg.gradient_accumulation_steps != 0:
-                continue
-
-            total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
-
-            lr = get_lr(step, train_cfg)
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = lr
-
-            optimizer.step()
-            optimizer.zero_grad()
-
-            wandb.log(
-                {"loss": accumulated_loss, "lr": lr, "grad_norm": total_norm.item()},
+        step += 1
+        if step % train_cfg.checkpoint_interval == 0:
+            save_checkpoint(
+                checkpoint_dir / f"step_{step}.pt",
+                model,
+                optimizer,
                 step=step,
+                dataset_state=train_dataset.state_dict(),
             )
-            logger.debug("step %d complete", step, extra={"step": step})
-            accumulated_loss = 0.0
-
-            step += 1
-            if step % train_cfg.checkpoint_interval == 0:
-                save_checkpoint(
-                    checkpoint_dir / f"step_{step}.pt",
-                    model,
-                    optimizer,
-                    step=step,
-                    dataset_state=train_dataset.state_dict(),
-                )
-                prune_old_checkpoints(checkpoint_dir, train_cfg.keep_last_n_checkpoints)
-                logger.info("saved checkpoint at step %d", step, extra={"step": step})
-            if step % train_cfg.eval_interval == 0:
-                val_loss = evaluate(
-                    model,
-                    val_dataloader,
-                    pad_id,
-                    device,
-                    autocast_dtype,
-                    train_cfg.use_amp,
-                    use_fused_ce_effective,
-                )
-                wandb.log({"val_loss": val_loss}, step=step)
-                logger.info(
-                    "val_loss %.4f at step %d",
-                    val_loss,
-                    step,
-                    extra={"step": step, "val_loss": val_loss},
-                )
-            if step >= train_cfg.max_steps:
-                break
+            prune_old_checkpoints(checkpoint_dir, train_cfg.keep_last_n_checkpoints)
+            logger.info("saved checkpoint at step %d", step, extra={"step": step})
+        if step % train_cfg.eval_interval == 0:
+            val_loss = evaluate(
+                model,
+                val_dataloader,
+                pad_id,
+                device,
+                autocast_dtype,
+                train_cfg.use_amp,
+                use_fused_ce_effective,
+            )
+            wandb.log({"val_loss": val_loss}, step=step)
+            logger.info(
+                "val_loss %.4f at step %d",
+                val_loss,
+                step,
+                extra={"step": step, "val_loss": val_loss},
+            )
 
     wandb.finish()
     logger.info("training complete after %d steps", step, extra={"step": step})
+
+
+def build_configs_from_args(
+    args: argparse.Namespace,
+) -> tuple[DataConfig, ModelConfig, TrainConfig]:
+    data_cfg = DataConfig(
+        dataset_name=args.dataset,
+        shuffle_buffer_size=args.shuffle_buffer_size,
+        max_seq_len=args.max_seq_len,
+        tokenizer_vocab_size=args.tokenizer_vocab_size,
+        tokenizer_sample_size=args.tokenizer_sample_size,
+    )
+    model_cfg = ModelConfig(
+        d_model=args.d_model,
+        n_layers=args.n_layers,
+        n_heads=args.n_heads,
+        n_kv_heads=args.n_kv_heads,
+        dropout=args.dropout,
+        rope_theta=args.rope_theta,
+    )
+    train_cfg = TrainConfig(
+        batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        grad_clip=args.grad_clip,
+        lr=args.lr,
+        min_lr=args.min_lr,
+        warmup_steps=args.warmup_steps,
+        weight_decay=args.weight_decay,
+        beta1=args.beta1,
+        beta2=args.beta2,
+        max_steps=args.max_steps,
+        seed=args.seed,
+        checkpoint_dir=args.checkpoint_dir,
+        checkpoint_interval=args.checkpoint_interval,
+        keep_last_n_checkpoints=args.keep_last_n_checkpoints,
+        eval_interval=args.eval_interval,
+        compile=args.compile,
+        use_amp=args.use_amp,
+        use_fused_ce=args.use_fused_ce,
+        wandb_project=args.wandb_project,
+        wandb_mode=args.wandb_mode,
+        log_file=args.log_file,
+    )
+    return data_cfg, model_cfg, train_cfg
 
 
 def main() -> None:
@@ -349,44 +422,7 @@ def main() -> None:
     parser.add_argument("--resume", type=str, default=None)
     args = parser.parse_args()
 
-    data_cfg = DataConfig(
-        dataset_name=args.dataset,
-        shuffle_buffer_size=args.shuffle_buffer_size,
-        max_seq_len=args.max_seq_len,
-        tokenizer_vocab_size=args.tokenizer_vocab_size,
-        tokenizer_sample_size=args.tokenizer_sample_size,
-    )
-    model_cfg = ModelConfig(
-        d_model=args.d_model,
-        n_layers=args.n_layers,
-        n_heads=args.n_heads,
-        n_kv_heads=args.n_kv_heads,
-        dropout=args.dropout,
-        rope_theta=args.rope_theta,
-    )
-    train_cfg = TrainConfig(
-        batch_size=args.batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        grad_clip=args.grad_clip,
-        lr=args.lr,
-        min_lr=args.min_lr,
-        warmup_steps=args.warmup_steps,
-        weight_decay=args.weight_decay,
-        beta1=args.beta1,
-        beta2=args.beta2,
-        max_steps=args.max_steps,
-        seed=args.seed,
-        checkpoint_dir=args.checkpoint_dir,
-        checkpoint_interval=args.checkpoint_interval,
-        keep_last_n_checkpoints=args.keep_last_n_checkpoints,
-        eval_interval=args.eval_interval,
-        compile=args.compile,
-        use_amp=args.use_amp,
-        use_fused_ce=args.use_fused_ce,
-        wandb_project=args.wandb_project,
-        wandb_mode=args.wandb_mode,
-        log_file=args.log_file,
-    )
+    data_cfg, model_cfg, train_cfg = build_configs_from_args(args)
     train(data_cfg, model_cfg, train_cfg, resume_path=args.resume)
 
 

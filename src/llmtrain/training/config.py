@@ -7,7 +7,10 @@ class DataConfig:
     shuffle_buffer_size: int = 1000
     max_seq_len: int = 2048
     tokenizer_vocab_size: int = 32768
-    tokenizer_sample_size: int = 200
+    # 200 was enough for the tiny_shakespeare smoke test but too thin a corpus to derive a
+    # 32k-vocab BPE tokenizer that generalizes to the real fineweb_edu pretraining run —
+    # bumped for a bigger future run; tiny_shakespeare (472 rows) just takes what's available.
+    tokenizer_sample_size: int = 10000
 
 
 @dataclass

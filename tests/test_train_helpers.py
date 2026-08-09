@@ -1,3 +1,4 @@
+import argparse
 import math
 
 import pytest
@@ -5,14 +6,17 @@ import torch
 
 from llmtrain.data.tokenizer import train_tokenizer
 from llmtrain.model.transformer import TransformerLM
-from llmtrain.training.config import ModelConfig, TrainConfig
+from llmtrain.training.config import DataConfig, ModelConfig, TrainConfig
 from llmtrain.training.train import (
+    build_configs_from_args,
+    collect_micro_batches,
     compute_loss,
     evaluate,
     get_lr,
     make_collate_fn,
     next_token_loss,
     select_device,
+    train_step,
 )
 
 
@@ -166,3 +170,126 @@ def test_compute_loss_non_fused_matches_direct_next_token_loss():
         loss_direct = next_token_loss(logits, input_ids, pad_id=0)
 
     assert torch.allclose(loss_via_compute_loss, loss_direct, atol=1e-6)
+
+
+def test_collect_micro_batches_collects_n_batches_in_order():
+    dataloader = [torch.tensor([i]) for i in range(5)]
+    data_iter = iter(dataloader)
+
+    batches, data_iter = collect_micro_batches(dataloader, data_iter, 3)
+
+    assert [b.item() for b in batches] == [0, 1, 2]
+
+
+def test_collect_micro_batches_wraps_to_a_new_epoch_on_exhaustion():
+    dataloader = [torch.tensor([i]) for i in range(2)]
+    data_iter = iter(dataloader)
+
+    batches, data_iter = collect_micro_batches(dataloader, data_iter, 3)
+
+    assert [b.item() for b in batches] == [0, 1, 0]
+    assert next(data_iter).item() == 1
+
+
+def test_train_step_updates_parameters_and_zeros_grads_after():
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=2, n_heads=2, n_kv_heads=1, dropout=0.0)
+    model = TransformerLM(config)
+    model.train()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    train_cfg = TrainConfig(grad_clip=1.0, lr=1e-2, min_lr=1e-3, warmup_steps=0, max_steps=100)
+    batches = [torch.randint(0, 16, (2, 6)), torch.randint(0, 16, (2, 6))]
+    params_before = [p.clone() for p in model.parameters()]
+
+    avg_loss, grad_norm, lr = train_step(
+        model,
+        optimizer,
+        batches,
+        train_cfg,
+        device=torch.device("cpu"),
+        pad_id=0,
+        autocast_dtype=None,
+        use_fused_ce=False,
+        step=0,
+    )
+
+    assert math.isfinite(avg_loss)
+    assert grad_norm >= 0
+    assert lr == pytest.approx(get_lr(0, train_cfg))
+    assert any(
+        not torch.equal(before, after) for before, after in zip(params_before, model.parameters())
+    )
+    assert all(p.grad is None or torch.all(p.grad == 0) for p in model.parameters())
+
+
+def test_build_configs_from_args_maps_every_field_to_its_dataclass():
+    args = argparse.Namespace(
+        dataset="tiny_shakespeare",
+        shuffle_buffer_size=123,
+        max_seq_len=64,
+        tokenizer_vocab_size=500,
+        tokenizer_sample_size=50,
+        d_model=32,
+        n_layers=2,
+        n_heads=2,
+        n_kv_heads=1,
+        dropout=0.1,
+        rope_theta=5000.0,
+        batch_size=4,
+        gradient_accumulation_steps=2,
+        grad_clip=0.5,
+        lr=1e-3,
+        min_lr=1e-4,
+        warmup_steps=10,
+        weight_decay=0.05,
+        beta1=0.8,
+        beta2=0.9,
+        max_steps=100,
+        seed=7,
+        checkpoint_dir="ckpt",
+        checkpoint_interval=10,
+        keep_last_n_checkpoints=2,
+        eval_interval=20,
+        compile=False,
+        use_amp=False,
+        use_fused_ce=False,
+        wandb_project="proj",
+        wandb_mode="disabled",
+        log_file="test.log",
+        resume=None,
+    )
+
+    data_cfg, model_cfg, train_cfg = build_configs_from_args(args)
+
+    assert data_cfg == DataConfig(
+        dataset_name="tiny_shakespeare",
+        shuffle_buffer_size=123,
+        max_seq_len=64,
+        tokenizer_vocab_size=500,
+        tokenizer_sample_size=50,
+    )
+    assert model_cfg == ModelConfig(
+        d_model=32, n_layers=2, n_heads=2, n_kv_heads=1, dropout=0.1, rope_theta=5000.0
+    )
+    assert train_cfg == TrainConfig(
+        batch_size=4,
+        gradient_accumulation_steps=2,
+        grad_clip=0.5,
+        lr=1e-3,
+        min_lr=1e-4,
+        warmup_steps=10,
+        weight_decay=0.05,
+        beta1=0.8,
+        beta2=0.9,
+        max_steps=100,
+        seed=7,
+        checkpoint_dir="ckpt",
+        checkpoint_interval=10,
+        keep_last_n_checkpoints=2,
+        eval_interval=20,
+        compile=False,
+        use_amp=False,
+        use_fused_ce=False,
+        wandb_project="proj",
+        wandb_mode="disabled",
+        log_file="test.log",
+    )
