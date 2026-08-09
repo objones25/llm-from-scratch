@@ -7,12 +7,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
+import wandb
 from datasets import IterableDataset
 from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-import wandb
 from llmtrain.data.streaming import load_streaming_datasets
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
 from llmtrain.logging_config import configure_logging
