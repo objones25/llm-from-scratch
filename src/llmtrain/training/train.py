@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import TypeVar
 
 import torch
-import wandb
 from datasets import IterableDataset
 from tokenizers import Tokenizer
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
+import wandb
 from llmtrain.data.chat import IGNORE_INDEX, encode_chat_batch
 from llmtrain.data.streaming import DATASET_REGISTRY, load_streaming_datasets
 from llmtrain.data.tokenizer import PAD_TOKEN, encode_batch, train_tokenizer
