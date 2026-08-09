@@ -1,9 +1,10 @@
 # Training guide
 
 This is the full walkthrough for running this project end to end: a local smoke test on a
-Mac, a real-scale smoke test on a rented A100, the actual `fineweb-edu` pretraining run, and
-inference against a checkpoint with `generate.py`. See the repo root `README.md` for a
-project overview; this doc assumes you've already read that and just want to run things.
+Mac, a real-scale smoke test on a rented A100, the actual `fineweb-edu` pretraining run, SFT
+on top of it, and inference against a checkpoint with `generate.py`. See the repo root
+`README.md` for a project overview; this doc assumes you've already read that and just want
+to run things.
 
 ## Setup
 
@@ -76,10 +77,10 @@ with `--keep-last-n-checkpoints 2`, `step_10.pt` was deleted once `step_30.pt` w
 leaving only `step_20.pt` and `step_30.pt` in `/tmp/smoke-test`.
 
 **Important caveat about this run**: no `--d-model`/`--n-layers`/etc. override was passed, so
-this ran the full default 125M-parameter architecture (`ModelConfig` defaults —
-`d_model=768`, `n_layers=12`, `n_heads=12`, `n_kv_heads=4`). That's the architecture the real
+this ran the full default 253.8M-parameter architecture (`ModelConfig` defaults —
+`d_model=1024`, `n_layers=20`, `n_heads=16`, `n_kv_heads=4`). That's the architecture the real
 pretraining run uses, which is exactly why it's a meaningful smoke test — but it's slow on
-Mac CPU/MPS (tens of seconds per optimizer step) and produces roughly 1GB checkpoint files
+Mac CPU/MPS (tens of seconds per optimizer step) and produces roughly 3GB checkpoint files
 even at 30 steps. If you just want to confirm the pipeline runs end to end without waiting or
 burning disk, override the architecture down, e.g.:
 
@@ -136,7 +137,7 @@ plan, not a verified transcript. Test it for real before trusting it blindly.
 Per `CLAUDE.md`, `reformer_enwik8` (`reds0510/enwik8-processed` on the Hub, 1.1M rows) exists
 specifically as a "~15-minute A100 smoke test... real-scale enough for `--resume` to behave
 correctly" — unlike `tiny_shakespeare`, whose 472 rows are smaller than the default shuffle
-buffer and make `--resume` silently train zero steps (see Part 5). This is the dataset to use
+buffer and make `--resume` silently train zero steps (see Part 6). This is the dataset to use
 to actually exercise `--resume` before trusting it on the real `fineweb_edu` run.
 
 ### One-time RunPod account setup
@@ -242,7 +243,7 @@ disown
 
 (`/workspace` assumes `df -h | grep workspace` showed that as the mount above — swap it if yours
 differs.) Every training command in this guide is wrapped in `nohup ... & disown` from here on
-— see Part 5's "dropped SSH connection" entry for why: without it, your SSH session dropping
+— see Part 6's "dropped SSH connection" entry for why: without it, your SSH session dropping
 (laptop sleep, network blip, closed terminal) kills the training process mid-write and corrupts
 whatever checkpoint it was saving. `disown` detaches the background job from the shell so it
 survives the session ending, not just a sleeping laptop. Tail `/root/train.log` to watch
@@ -273,14 +274,17 @@ Confirm in the logs/W&B that the step counter picks up at 50 rather than restart
 that `loss`/`val_loss` continue their existing trend rather than jumping back up to their
 step-0 values — that's the signal `--resume` actually restored model/optimizer state and
 dataset stream position rather than just resuming the step counter cosmetically. Per
-`CLAUDE.md`'s documented shuffle-buffer caveat (see Part 5), expect up to ~1000 rows to be
+`CLAUDE.md`'s documented shuffle-buffer caveat (see Part 6), expect up to ~1000 rows to be
 silently skipped across the resume boundary — bounded and practically invisible against
 1.1M rows, unlike on `tiny_shakespeare`.
 
 ## Part 3 — The real `fineweb_edu` pretraining run
 
-Same code path as Parts 1 and 2 — the only required change is `--dataset fineweb_edu`, plus
-real-scale `--max-steps` and a network-volume `--checkpoint-dir`:
+Same code path as Parts 1 and 2 — `--dataset fineweb_edu` and a network-volume
+`--checkpoint-dir`. No architecture flags are needed: `ModelConfig` defaults already encode
+this run's architecture (`d_model=1024, n_layers=20, n_heads=16, n_kv_heads=4` — 253.8M
+total / 220.2M non-embedding parameters), and `TrainConfig.max_steps` already defaults to
+`10500`.
 
 ```bash
 nohup uv run --env-file .env python -m llmtrain.training.train --dataset fineweb_edu \
@@ -289,38 +293,161 @@ nohup uv run --env-file .env python -m llmtrain.training.train --dataset fineweb
 disown
 ```
 
-(same mount as Part 2 — re-verify with `df -h | grep workspace` if this is a different/fresh pod,
-and swap `/workspace` if it differs.) This run lasts far longer than Part 2's smoke test, so
-`nohup ... & disown` matters even more here — see the note in Part 2 and Part 5's "dropped SSH
-connection" entry.
+(confirm your pod's network-volume mount with `df -h | grep workspace` first — swap
+`/workspace` if yours differs.) This run lasts hours, not minutes, so `nohup ... & disown`
+matters even more here — see Part 2 and Part 6's "dropped SSH connection" entry. The run's
+final checkpoint will be `step_10500.pt` (10500 / `checkpoint_interval` (125) = 84 exactly,
+so `max_steps` lands cleanly on a checkpoint boundary) — this is the exact filename Part 4's
+SFT commands below point `--init-from-checkpoint` at.
 
-Left at their `TrainConfig` defaults (`max_steps=10000`, `batch_size=32`,
-`gradient_accumulation_steps=8`, `max_seq_len=2048`), this trains on `32 × 8 × 2048 =
-524,288` tokens per optimizer step, `5.24B` tokens total — deliberately above the
-~1.5B Chinchilla-optimal token count for this model's ~75.5M non-embedding parameters
-(see `docs/superpowers/specs/2026-08-06-pretraining-loop-hardening-design.md`). That's an
-intentional choice, not an oversight: it matches the "overtrain a small model for inference
-quality" approach LLaMA popularized, trading extra training compute for a better model at a
-fixed inference-time parameter count. No change to `--max-steps` is needed to get this
-behavior — it falls out of the defaults.
+At the defaults (`max_steps=10500`, `batch_size=32`, `gradient_accumulation_steps=8`,
+`max_seq_len=2048`), this trains on `32 × 8 × 2048 = 524,288` tokens per optimizer step,
+**~5.51B tokens total**. This model/token budget was picked via a Chinchilla-scaling
+analysis of the previous run's plateauing loss curve (100.7M params, 5.24B tokens, val_loss
+dropping 0.588 in its first 500 steps vs. only 0.005 in its last 500) — see
+`docs/superpowers/specs/2026-08-09-model-scale-up-design.md` for the full reasoning. In
+short: that run was already well past its own compute-optimal token count (~52
+tokens/non-embedding-param vs. Chinchilla's ~20), so the extra compute this run spends goes
+mostly into a bigger model (220.2M non-embedding params, up from 75.5M) with a token count
+(~5.51B) close to *this* model's own ~4.9B-token optimum — deliberately a bit past it,
+matching this project's established overtraining-for-inference-quality philosophy (same as
+the original run, see
+`docs/superpowers/specs/2026-08-06-pretraining-loop-hardening-design.md`).
 
 Same `uv sync --extra cuda` prerequisite as Part 2 applies here (fused cross-entropy is on by
 default and needs `liger-kernel`).
 
-### Cost awareness: checkpoint storage
+### Cost awareness: checkpoint storage — resize the network volume first
 
-Checkpoints are confirmed ~1GB each at the default architecture. With the default
-`--keep-last-n-checkpoints 3`, steady-state storage on the network volume is roughly 3GB —
-this cap is deliberate: checkpoint pruning (`prune_old_checkpoints()` in
-`training/checkpoint.py`) was added specifically because unbounded checkpoint accumulation
-over a `max_steps=10000` run (potentially dozens of `checkpoint_interval`-spaced saves) was
-flagged as a real network-volume cost risk, not just a tidiness concern. If you widen
-`--keep-last-n-checkpoints` for extra resume safety margin, multiply accordingly — network
-volumes are billed for their provisioned size regardless of how much of it is actually used,
-so also right-size the volume itself up front rather than relying purely on the checkpoint
-cap.
+Checkpoints are exactly `12 bytes/param` (fp32 weights + AdamW's two fp32 moment tensors) —
+confirmed against the previous run's checkpoint sizes. At 253,756,416 params, each
+`step_N.pt` is **~3.05GB**, not the ~1.2GB of the previous architecture. `save_checkpoint()`
+writes the new file before `prune_old_checkpoints()` deletes the oldest, so at the default
+`--keep-last-n-checkpoints 3` there's a brief window with **4 checkpoints resident at once
+(~12.2GB)**. Your network volume needs to be resized to comfortably clear that — **resize it
+to at least 20GB** (RunPod console → Storage → your volume → resize; this generally requires
+stopping the pod first) before launching the command above.
 
-## Part 4 — `generate.py` in depth
+Free up space on the volume first by deleting the previous run's checkpoints — they're
+already archived locally and verified (`~/Downloads/step_10000.pt` matches the SHA-256 of
+the cached copy at `~/.cache/llmtrain/s3/304ulu3f96/checkpoints/step_10000.pt`), so this is
+safe:
+
+```bash
+uv run --with boto3 --env-file .env python -c "
+import boto3
+s3 = boto3.client('s3')
+bucket = '304ulu3f96'
+for key in [
+    'checkpoints/step_10000.pt', 'checkpoints/step_9875.pt', 'checkpoints/step_9750.pt',
+    'sft-checkpoints/step_125.pt',
+    'sft-checkpoints-smoltalk/step_1750.pt',
+    'sft-checkpoints-smoltalk/step_1875.pt',
+    'sft-checkpoints-smoltalk/step_2000.pt',
+]:
+    s3.delete_object(Bucket=bucket, Key=key)
+    print('deleted', key)
+"
+```
+
+(the small `tokenizer.json` objects in each of those prefixes don't need deleting — the new
+pretraining/SFT runs overwrite them automatically at startup.)
+
+## Part 4 — SFT (`no_robots` sanity check, then `smoltalk`)
+
+`--init-from-checkpoint` loads model weights only (no optimizer/step state) from a
+pretraining checkpoint into a fresh SFT run — see `CLAUDE.md`'s architecture section for the
+full `--init-from-checkpoint`/`--resume` distinction and footguns.
+
+### 1. Sanity check on `no_robots`
+
+Small, fast dataset — proves the SFT pipeline works before committing to the long `smoltalk`
+run below. Points at the pretraining run's final checkpoint, `step_10500.pt`:
+
+```bash
+uv run --env-file .env python -m llmtrain.training.train \
+  --dataset no_robots \
+  --init-from-checkpoint /workspace/checkpoints/step_10500.pt \
+  --checkpoint-dir /workspace/sft-checkpoints \
+  --max-seq-len 2048 \
+  --lr 3e-5 --min-lr 3e-6 --warmup-steps 20 \
+  --max-steps 150 \
+  --wandb-project llm-training
+```
+
+- Architecture flags don't need to be passed — `--init-from-checkpoint` auto-adopts them
+  from the checkpoint's persisted `model_config`.
+- `--lr`/`--min-lr` are ~10x lower than pretraining defaults (standard SFT practice);
+  `--max-steps 150` is roughly 4 epochs over `no_robots` at the default effective batch size
+  (256).
+- `--max-seq-len` is **not** auto-adopted from the checkpoint — always pass it explicitly
+  matching pretraining (`2048` here), or the two runs silently diverge.
+- `--tokenizer-path` doesn't need to be passed — it defaults to `tokenizer.json` next to
+  `--init-from-checkpoint`, which is where `train.py` always saves it.
+- Once this completes cleanly (finite/decreasing `val_loss`, `generate.py` runs against the
+  result), move on to `smoltalk` below.
+
+### 2. Scale up: `smoltalk`
+
+`--init-from-checkpoint` still points at the pretraining checkpoint, not the `no_robots`
+output above — the sanity check only proves the pipeline works, it isn't a step to build on.
+A separate `--checkpoint-dir` keeps the two SFT runs from colliding:
+
+```bash
+uv run --env-file .env python -m llmtrain.training.train \
+  --dataset smoltalk \
+  --init-from-checkpoint /workspace/checkpoints/step_10500.pt \
+  --checkpoint-dir /workspace/sft-checkpoints-smoltalk \
+  --max-seq-len 2048 \
+  --lr 3e-5 --min-lr 3e-6 --warmup-steps 300 \
+  --max-steps 12000 \
+  --wandb-project llm-training
+```
+
+- `smoltalk`'s `all` config has ~1.0M train rows; at the default effective batch size (256),
+  one epoch is ~3900 steps. `--max-steps 12000` (~3 epochs) is a starting point based on
+  typical SFT recipes, not a value tuned against this specific model — watch `val_loss` on
+  the W&B dashboard and stop the run manually (`Ctrl-C`) whenever it plateaus or you've seen
+  enough, rather than treating 12000 as a number you must reach. `--checkpoint-interval`
+  (default 125) means there's always a recent checkpoint to grab whenever you decide to stop.
+- `--warmup-steps 300` scales up proportionally from the `no_robots` run's 20 (same warmup
+  fraction of total steps).
+
+### 3. Pull a checkpoint down for evaluation
+
+RunPod exposes network volumes over an S3-compatible API, so you don't need `scp` or the pod
+to be running — `generate.py` reads `s3://` paths directly (see Part 5 below for how this
+works in general). Your bucket is the network volume's ID, `304ulu3f96`; the
+endpoint/region (`https://s3api-us-md-1.runpod.io`, `us-md-1`) and your S3 API key pair are
+already in your local `.env`.
+
+Generate directly against the volume (downloads and caches under
+`~/.cache/llmtrain/s3/304ulu3f96/`, so repeated runs against the same checkpoint don't
+re-download it):
+
+```bash
+uv run --env-file .env python -m llmtrain.generate \
+  --checkpoint s3://304ulu3f96/sft-checkpoints-smoltalk/step_<N>.pt \
+  --prompt "What is the capital of France?" \
+  --max-new-tokens 200 --temperature 0.7 --repetition-penalty 1.2
+```
+
+(swap `sft-checkpoints-smoltalk` for `sft-checkpoints` to evaluate the `no_robots` sanity run
+instead, and `step_<N>` for whichever step you stopped at.)
+
+List what's actually on the volume if you're not sure which `step_N.pt` files survived
+`--keep-last-n-checkpoints` pruning:
+
+```bash
+uv run --with boto3 --env-file .env python -c "
+import boto3
+s3 = boto3.client('s3')
+for obj in s3.list_objects_v2(Bucket='304ulu3f96').get('Contents', []):
+    print(obj['Key'], obj['Size'])
+"
+```
+
+## Part 5 — `generate.py` in depth
 
 ```text
 python -m llmtrain.generate --checkpoint <path/to/step_N.pt> [--tokenizer-path PATH] \
@@ -339,26 +466,27 @@ local path** — useful for running `generate.py` straight against a pod's netwo
 the pod itself has stopped, without a manual `scp` first (RunPod exposes network volumes over
 an S3-compatible API even when nothing is running). Requires the optional `s3` dependency
 group (`uv sync --extra s3`) and, in `.env`, an S3 API key pair from the RunPod console plus
-the endpoint/region:
+the endpoint/region — already set up in this project's local `.env` (bucket `304ulu3f96`,
+region `us-md-1`, endpoint `https://s3api-us-md-1.runpod.io`):
 
 ```dotenv
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
-AWS_ENDPOINT_URL_S3=https://s3api-<region>.runpod.io
-AWS_DEFAULT_REGION=<region>
+AWS_ENDPOINT_URL_S3=https://s3api-us-md-1.runpod.io
+AWS_DEFAULT_REGION=us-md-1
 ```
 
 ```bash
 uv run --env-file .env python -m llmtrain.generate \
-  --checkpoint s3://<bucket>/checkpoints/step_10000.pt \
+  --checkpoint s3://304ulu3f96/checkpoints/step_10500.pt \
   --prompt "..."
 ```
 
 `--tokenizer-path` doesn't need to be passed here either — it defaults to `tokenizer.json` in
 the same S3 prefix as `--checkpoint`, same as the local-path default. First run downloads and
-caches under `~/.cache/llmtrain/s3/<bucket>/<key>`; later runs against the same checkpoint skip
+caches under `~/.cache/llmtrain/s3/304ulu3f96/`; later runs against the same checkpoint skip
 the download entirely (checkpoints are treated as immutable once written) — matters in
-practice, since these are ~1GB+ files.
+practice, since these are ~3GB+ files.
 
 Sampling happens per-token in `_sample()` (`src/llmtrain/generate.py`), in this exact order:
 
@@ -388,7 +516,7 @@ Generation itself is KV-cache-backed (`model/cache.py`'s `KVCache`): the full pr
 through the model once to seed the cache, then each subsequent token is generated from a
 single-token forward pass rather than re-running the whole growing sequence.
 
-## Part 5 — Troubleshooting and known limitations
+## Part 6 — Troubleshooting and known limitations
 
 **`--resume` silently drops examples across the resume boundary, catastrophically so on
 `tiny_shakespeare`.** `datasets` (confirmed v5.0.1) doesn't preserve the shuffle buffer's
@@ -411,7 +539,7 @@ own) in `tests/test_streaming.py::test_shuffled_skip_dataset_resumes_correctly_v
   bounded, practically invisible loss, not a stream failure. This is why Part 2 uses
   `reformer_enwik8` to demonstrate `--resume`, not `tiny_shakespeare`.
 
-**Checkpoint storage is a real, capped cost, not just tidiness.** See Part 3 — ~1GB per
+**Checkpoint storage is a real, capped cost, not just tidiness.** See Part 3 — ~3.05GB per
 checkpoint at the default architecture, capped at `--keep-last-n-checkpoints` (default 3) via
 `prune_old_checkpoints()`.
 

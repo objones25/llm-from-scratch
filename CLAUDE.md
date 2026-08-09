@@ -57,7 +57,7 @@ training/checkpoint.py # saves/loads model + optimizer + dataset iterator state 
                        # network-mounted (MooseFS) --checkpoint-dir, once from a dropped SSH session and
                        # once under nohup/disown with no SSH involvement at all, pointing at transient
                        # network-volume write failures rather than anything SSH-related — see
-                       # docs/training-guide.md Part 5
+                       # docs/training-guide.md Part 6
 generate.py             # KV-cache-backed text generation from a checkpoint; main() is a second CLI entry point
 s3.py                   # resolve_local_path()/sibling_path(): --checkpoint/--tokenizer-path accept
                        # s3://bucket/key as well as local paths (added so generate.py can run
