@@ -8,6 +8,7 @@ __pycache__/
 .env
 credentials.txt
 checkpoints/
+checkpoints-downloaded/
 app.log*
 wandb/
 .DS_Store
