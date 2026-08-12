@@ -9,6 +9,8 @@ __pycache__/
 credentials.txt
 checkpoints/
 checkpoints-downloaded/
+my_checkpoints/
+my_sft_checkpoints/
 plots/
 app.log*
 wandb/
