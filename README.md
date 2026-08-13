@@ -34,8 +34,8 @@ the real pretraining run happens on a rented RunPod A100 GPU.
   (`--tokenizer-sample-size`, default 10000 examples) drawn from the streaming dataset itself —
   there's no pre-shipped tokenizer artifact; `tokenizer.json` is saved next to the checkpoints.
 
-At the default config (`d_model=1024`, `n_layers=20`, `n_heads=16`, `n_kv_heads=4`,
-`vocab_size=32768`, `max_seq_len=2048`) the model is 253.8M parameters (220.2M
+At the default config (`d_model=1440`, `n_layers=20`, `n_heads=20`, `n_kv_heads=4`,
+`vocab_size=32768`, `max_seq_len=2048`) the model is 478.6M parameters (431.4M
 non-embedding).
 
 ## Requirements
@@ -183,8 +183,8 @@ validated by the manual smoke test described above and in
   than the default shuffle buffer (1000), and `datasets` discards the shuffle buffer's
   contents on `load_state_dict`, so the resumed stream comes up empty with no error raised.
   `--resume` works correctly on real-scale datasets (`reformer_enwik8`, `fineweb_edu`).
-- **Checkpoints are large even at smoke-test scale.** At the default 253.8M-parameter
-  architecture, each `step_N.pt` is roughly 3.05GB (model + optimizer state), regardless of
+- **Checkpoints are large even at smoke-test scale.** At the default 478.6M-parameter
+  architecture, each `step_N.pt` is roughly 5.74GB (model + optimizer state), regardless of
   how few training steps produced it. `--keep-last-n-checkpoints` prunes old ones, but disk
   usage during a run should be planned for accordingly.
 - **Short runs produce garbled output.** A few dozen steps on a few hundred training rows,

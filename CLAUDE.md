@@ -47,7 +47,7 @@ training/checkpoint.py # saves/loads model + optimizer + dataset iterator state 
                        # optimizer is optional on load (inference callers pass none — no reason for
                        # generate.py to be coupled to train()'s optimizer shape, e.g. its param-group
                        # structure) and prune_old_checkpoints() keeps only the N most recent step_*.pt
-                       # files (TrainConfig.keep_last_n_checkpoints, default 3) — checkpoints are ~3GB
+                       # files (TrainConfig.keep_last_n_checkpoints, default 3) — checkpoints are ~5.74GB
                        # each at the real fineweb_edu-scale config, so unbounded accumulation over a
                        # long run is a real network-volume storage cost, not just a tidiness concern.
                        # save_checkpoint() writes to a step_N.pt.tmp file and only os.replace()s it
@@ -68,7 +68,7 @@ s3.py                   # resolve_local_path()/sibling_path(): --checkpoint/--to
                        # pyproject.toml, same pattern as the `cuda` extra for liger-kernel). Downloads
                        # are cached under ~/.cache/llmtrain/s3/<bucket>/<key> keyed by bucket/key, skipped
                        # on repeat runs against the same checkpoint since checkpoints are immutable once
-                       # written — matters in practice, checkpoints are ~3GB+. Endpoint/region come from
+                       # written — matters in practice, checkpoints are ~5.74GB+. Endpoint/region come from
                        # the AWS_ENDPOINT_URL_S3/AWS_DEFAULT_REGION env vars (botocore >=1.31 resolves
                        # these automatically), so a RunPod S3 API key pair plus those two vars in .env is
                        # enough — no endpoint config in code.

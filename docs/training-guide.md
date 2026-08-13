@@ -79,10 +79,10 @@ leaving only `step_20.pt` and `step_30.pt` in `/tmp/smoke-test`.
 **Important caveat about this run**: no `--d-model`/`--n-layers`/etc. override was passed, so
 this ran the full default architecture at the time this transcript was captured — 100.7M
 params (`d_model=768`, `n_layers=12`, `n_heads=12`, `n_kv_heads=4`), which is what produced
-the exact `val_loss` numbers above. The default architecture is now the larger 253.8M-param
-one (`d_model=1024`, `n_layers=20`, `n_heads=16`, `n_kv_heads=4`) used by the real pretraining
+the exact `val_loss` numbers above. The default architecture is now the larger 478.6M-param
+one (`d_model=1440`, `n_layers=20`, `n_heads=20`, `n_kv_heads=4`) used by the real pretraining
 run — re-running this exact command today exercises that architecture instead, so expect
-different absolute `val_loss` values and roughly 3GB checkpoint files (not the ~1GB this
+different absolute `val_loss` values and roughly 5.74GB checkpoint files (not the ~1GB this
 original transcript produced) even at 30 steps. Either way it's slow on Mac CPU/MPS (tens of
 seconds per optimizer step); the decreasing trend is still the signal to look for, not the
 specific numbers. If you just want to confirm the pipeline runs end to end without waiting or
@@ -166,7 +166,7 @@ to match, not the other way around:
 
 1. RunPod console → **Storage** → **New Network Volume**.
 2. Pick a data center, give it a name, and size it generously above what `--keep-last-n-checkpoints`
-   × ~3GB actually needs (see Part 3's cost-awareness note) — network volumes are billed for
+   × ~5.74GB actually needs (see Part 3's cost-awareness note) — network volumes are billed for
    their provisioned size regardless of how much is actually used, and resizing later means
    picking a size you won't need to revisit mid-run.
 
@@ -286,9 +286,9 @@ silently skipped across the resume boundary — bounded and practically invisibl
 
 Same code path as Parts 1 and 2 — `--dataset fineweb_edu` and a network-volume
 `--checkpoint-dir`. No architecture flags are needed: `ModelConfig` defaults already encode
-this run's architecture (`d_model=1024, n_layers=20, n_heads=16, n_kv_heads=4` — 253.8M
-total / 220.2M non-embedding parameters), and `TrainConfig.max_steps` already defaults to
-`10500`.
+this run's architecture (`d_model=1440, n_layers=20, n_heads=20, n_kv_heads=4` — 478.6M
+total / 431.4M non-embedding parameters), and `TrainConfig.max_steps` already defaults to
+`18500`.
 
 ```bash
 nohup uv run --env-file .env python -m llmtrain.training.train --dataset fineweb_edu \
@@ -300,23 +300,26 @@ disown
 (confirm your pod's network-volume mount with `df -h | grep workspace` first — swap
 `/workspace` if yours differs.) This run lasts hours, not minutes, so `nohup ... & disown`
 matters even more here — see Part 2 and Part 6's "dropped SSH connection" entry. The run's
-final checkpoint will be `step_10500.pt` (10500 / `checkpoint_interval` (125) = 84 exactly,
+final checkpoint will be `step_18500.pt` (18500 / `checkpoint_interval` (125) = 148 exactly,
 so `max_steps` lands cleanly on a checkpoint boundary) — this is the exact filename Part 4's
 SFT commands below point `--init-from-checkpoint` at.
 
-At the defaults (`max_steps=10500`, `batch_size=32`, `gradient_accumulation_steps=8`,
+At the defaults (`max_steps=18500`, `batch_size=32`, `gradient_accumulation_steps=8`,
 `max_seq_len=2048`), this trains on `32 × 8 × 2048 = 524,288` tokens per optimizer step,
-**~5.51B tokens total**. This model/token budget was picked via a Chinchilla-scaling
-analysis of the previous run's plateauing loss curve (100.7M params, 5.24B tokens, val_loss
-dropping 0.588 in its first 500 steps vs. only 0.005 in its last 500) — see
-`docs/superpowers/specs/2026-08-09-model-scale-up-design.md` for the full reasoning. In
-short: that run was already well past its own compute-optimal token count (~69
-tokens/non-embedding-param vs. Chinchilla's ~20), so the extra compute this run spends goes
-mostly into a bigger model (220.2M non-embedding params, up from 75.5M) with a token count
-(~5.51B) close to *this* model's own ~4.9B-token optimum — deliberately a bit past it,
-matching this project's established overtraining-for-inference-quality philosophy (same as
-the original run, see
-`docs/superpowers/specs/2026-08-06-pretraining-loop-hardening-design.md`).
+**~9.70B tokens total**. This model/token budget was picked via a Chinchilla-scaling
+analysis of the previous (220.2M-param) run's plateauing loss curve, which reproduced the
+same flat-tail `val_loss` signature (0.0052 drop in its final 500 of 10,500 steps) that
+originally triggered the first scale-up — see
+`docs/pretrain-sft-scale-analysis.md` and
+`docs/superpowers/specs/2026-08-13-model-scale-up-v2-design.md` for the full reasoning. In
+short: that run was already past its own compute-optimal token count (25.0
+tokens/non-embedding-param vs. Chinchilla's ~20) yet still capacity-limited, so this run's
+larger compute budget goes mostly into a bigger model (431.4M non-embedding params, up from
+220.2M) with a token count (~9.70B, 22.5 tokens/param) again deliberately a bit past this
+model's own Chinchilla optimum, matching this project's established
+overtraining-for-inference-quality philosophy (same as both prior runs, see
+`docs/superpowers/specs/2026-08-06-pretraining-loop-hardening-design.md` and
+`docs/superpowers/specs/2026-08-09-model-scale-up-design.md`).
 
 Same `uv sync --extra cuda` prerequisite as Part 2 applies here (fused cross-entropy is on by
 default and needs `liger-kernel`).
@@ -324,24 +327,28 @@ default and needs `liger-kernel`).
 ### Cost awareness: checkpoint storage — resize the network volume first
 
 Checkpoints are exactly `12 bytes/param` (fp32 weights + AdamW's two fp32 moment tensors) —
-confirmed against the previous run's checkpoint sizes. At 253,756,416 params, each
-`step_N.pt` is **~3.05GB**, not the ~1.2GB of the previous architecture. `save_checkpoint()`
+confirmed against both prior runs' checkpoint sizes. At 478,553,760 params, each
+`step_N.pt` is **~5.74GB**, not the ~3.05GB of the previous architecture. `save_checkpoint()`
 writes the new file before `prune_old_checkpoints()` deletes the oldest, so at the default
 `--keep-last-n-checkpoints 3` there's a brief window with **4 checkpoints resident at once
-(~12.2GB)** for pretraining alone. Part 4's SFT runs afterward add their own checkpoints on
-top of that while `step_10500.pt` still needs to stay on the volume (`--init-from-checkpoint`
+(~23.0GB)** for pretraining alone. Part 4's SFT runs afterward add their own checkpoints on
+top of that while `step_18500.pt` still needs to stay on the volume (`--init-from-checkpoint`
 reads it) — realistic peak usage across pretraining plus both SFT stages, if you don't clean
-anything up in between, is closer to **~27.4GB** (12.2GB pretraining peak + ~3GB `no_robots`
-checkpoints + ~12.2GB `smoltalk` peak). Your network volume needs to be resized to comfortably
-clear that — **resize it to at least 30GB** (RunPod console → Storage → your volume → resize;
+anything up in between, is closer to **~51.7GB** (23.0GB pretraining peak + ~5.74GB `no_robots`
+checkpoints + ~23.0GB `smoltalk` peak). Your network volume needs to be resized to comfortably
+clear that — **resize it to at least 60GB** (RunPod console → Storage → your volume → resize;
 this generally requires stopping the pod first) before launching the command above, or delete
-the older pretraining checkpoints (keeping only `step_10500.pt`) before starting Part 4 if
-you'd rather stay closer to 20GB.
+the older pretraining checkpoints (keeping only `step_18500.pt`) before starting Part 4 if
+you'd rather stay closer to 40GB.
 
-Free up space on the volume first by deleting the previous run's checkpoints — they're
-already archived locally and verified (`~/Downloads/step_10000.pt` matches the SHA-256 of
-the cached copy at `~/.cache/llmtrain/s3/304ulu3f96/checkpoints/step_10000.pt`), so this is
-safe:
+Free up space on the volume first by deleting the previous (220.2M-param) run's checkpoints —
+verify they're archived locally first (e.g. `step_10500.pt` and `step_12000.pt` matching the
+SHA-256 of the cached copies under `~/.cache/llmtrain/s3/304ulu3f96/`) before deleting. With
+`--keep-last-n-checkpoints 3` (default), the pretraining run retained `step_10500.pt` plus its
+two preceding checkpoints, and the `smoltalk` SFT run retained `step_12000.pt` plus its two
+preceding checkpoints; the `no_robots` sanity check (`--max-steps 150`) only ever produced one
+checkpoint. Confirm the actual keys present on the volume before running this — the run may
+have stopped early or pruning may have landed on different step numbers than assumed here:
 
 ```bash
 uv run --with boto3 --env-file .env python -c "
@@ -349,11 +356,11 @@ import boto3
 s3 = boto3.client('s3')
 bucket = '304ulu3f96'
 for key in [
-    'checkpoints/step_10000.pt', 'checkpoints/step_9875.pt', 'checkpoints/step_9750.pt',
+    'checkpoints/step_10500.pt', 'checkpoints/step_10375.pt', 'checkpoints/step_10250.pt',
     'sft-checkpoints/step_125.pt',
-    'sft-checkpoints-smoltalk/step_1750.pt',
-    'sft-checkpoints-smoltalk/step_1875.pt',
-    'sft-checkpoints-smoltalk/step_2000.pt',
+    'sft-checkpoints-smoltalk/step_11750.pt',
+    'sft-checkpoints-smoltalk/step_11875.pt',
+    'sft-checkpoints-smoltalk/step_12000.pt',
 ]:
     s3.delete_object(Bucket=bucket, Key=key)
     print('deleted', key)
@@ -372,12 +379,12 @@ full `--init-from-checkpoint`/`--resume` distinction and footguns.
 ### 1. Sanity check on `no_robots`
 
 Small, fast dataset — proves the SFT pipeline works before committing to the long `smoltalk`
-run below. Points at the pretraining run's final checkpoint, `step_10500.pt`:
+run below. Points at the pretraining run's final checkpoint, `step_18500.pt`:
 
 ```bash
 nohup uv run --env-file .env python -m llmtrain.training.train \
   --dataset no_robots \
-  --init-from-checkpoint /workspace/checkpoints/step_10500.pt \
+  --init-from-checkpoint /workspace/checkpoints/step_18500.pt \
   --checkpoint-dir /workspace/sft-checkpoints \
   --max-seq-len 2048 \
   --lr 3e-5 --min-lr 3e-6 --warmup-steps 20 \
@@ -411,7 +418,7 @@ A separate `--checkpoint-dir` keeps the two SFT runs from colliding:
 ```bash
 nohup uv run --env-file .env python -m llmtrain.training.train \
   --dataset smoltalk \
-  --init-from-checkpoint /workspace/checkpoints/step_10500.pt \
+  --init-from-checkpoint /workspace/checkpoints/step_18500.pt \
   --checkpoint-dir /workspace/sft-checkpoints-smoltalk \
   --max-seq-len 2048 \
   --lr 3e-5 --min-lr 3e-6 --warmup-steps 300 \
@@ -502,7 +509,7 @@ AWS_DEFAULT_REGION=us-md-1
 
 ```bash
 uv run --env-file .env python -m llmtrain.generate \
-  --checkpoint s3://304ulu3f96/checkpoints/step_10500.pt \
+  --checkpoint s3://304ulu3f96/checkpoints/step_18500.pt \
   --prompt "..."
 ```
 
@@ -510,7 +517,7 @@ uv run --env-file .env python -m llmtrain.generate \
 the same S3 prefix as `--checkpoint`, same as the local-path default. First run downloads and
 caches under `~/.cache/llmtrain/s3/304ulu3f96/`; later runs against the same checkpoint skip
 the download entirely (checkpoints are treated as immutable once written) — matters in
-practice, since these are ~3GB+ files.
+practice, since these are ~5.74GB+ files.
 
 Sampling happens per-token in `_sample()` (`src/llmtrain/generate.py`), in this exact order:
 
@@ -563,7 +570,7 @@ own) in `tests/test_streaming.py::test_shuffled_skip_dataset_resumes_correctly_v
   bounded, practically invisible loss, not a stream failure. This is why Part 2 uses
   `reformer_enwik8` to demonstrate `--resume`, not `tiny_shakespeare`.
 
-**Checkpoint storage is a real, capped cost, not just tidiness.** See Part 3 — ~3.05GB per
+**Checkpoint storage is a real, capped cost, not just tidiness.** See Part 3 — ~5.74GB per
 checkpoint at the default architecture, capped at `--keep-last-n-checkpoints` (default 3) via
 `prune_old_checkpoints()`.
 

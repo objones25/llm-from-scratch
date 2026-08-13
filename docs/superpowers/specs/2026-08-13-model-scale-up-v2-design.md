@@ -73,8 +73,8 @@ Searching the valid grid at `n_layers=20` (unchanged depth — see next section 
 best fit near 440–460M non-embedding params, with `head_dim` a multiple of 8:
 
 | d_model | n_layers | n_heads | head_dim | n_kv_heads | non-emb params | total params |
-|---|---|---|---|---|---|---|
-| 1440 | 20 | 20 | 72 | 4 | **431.4M** | 478.6M |
+| ------- | -------- | ------- | -------- | ---------- | --------------- | ------------- |
+| 1440    | 20       | 20      | 72       | 4          | **431.4M**       | 478.6M        |
 
 Verified by direct instantiation (`TransformerLM(cfg)`, summing `.parameters()`, same method the
 first scale-up spec used): **478,553,760 total / 431,367,840 non-embedding** — 1.96x the current

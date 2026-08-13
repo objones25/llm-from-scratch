@@ -16,9 +16,9 @@ class DataConfig:
 @dataclass
 class ModelConfig:
     vocab_size: int = 32768
-    d_model: int = 1024
+    d_model: int = 1440
     n_layers: int = 20
-    n_heads: int = 16
+    n_heads: int = 20
     n_kv_heads: int = 4
     dropout: float = 0.0
     rope_theta: float = 10000.0
@@ -35,7 +35,7 @@ class TrainConfig:
     weight_decay: float = 0.1
     beta1: float = 0.9
     beta2: float = 0.95
-    max_steps: int = 10500
+    max_steps: int = 18500
     seed: int = 42
     checkpoint_dir: str = "checkpoints"
     checkpoint_interval: int = 125
