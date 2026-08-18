@@ -1,5 +1,8 @@
+import pytest
 import torch
+from datasets import Dataset
 from transformers.modeling_outputs import CausalLMOutputWithPast
+from trl import DPOConfig, DPOTrainer
 
 from llmtrain.data.tokenizer import PAD_TOKEN, train_tokenizer
 from llmtrain.model.hf_wrapper import TransformerLMConfig, TransformerLMForCausalLM, wrap_tokenizer
@@ -58,3 +61,84 @@ def test_wrapper_round_trips_through_the_existing_checkpoint_format(tmp_path):
 
     for p_orig, p_loaded in zip(original.model.parameters(), loaded.model.parameters()):
         assert torch.equal(p_orig, p_loaded)
+
+
+def _tiny_dpo_setup():
+    texts = [
+        "hello world",
+        "hello there friend",
+        "the quick brown fox jumps over",
+        "goodbye my old friend",
+    ]
+    tokenizer = train_tokenizer(texts, vocab_size=64)
+    wrapped_tokenizer = wrap_tokenizer(tokenizer)
+    hf_config = TransformerLMConfig(
+        vocab_size=wrapped_tokenizer.vocab_size, d_model=8, n_layers=2, n_heads=2, n_kv_heads=1
+    )
+    model = TransformerLMForCausalLM(hf_config)
+    ref_model = TransformerLMForCausalLM(hf_config)
+    ref_model.load_state_dict(model.state_dict())
+    dataset = Dataset.from_dict(
+        {
+            "prompt": ["hello ", "hello ", "hello ", "hello "],
+            "chosen": ["world", "there friend, the quick brown fox jumps over", "world", "there friend"],
+            "rejected": ["there", "world", "there", "world"],
+        }
+    )
+    return model, ref_model, wrapped_tokenizer, dataset
+
+
+def test_dpo_trainer_batches_are_right_padded(tmp_path):
+    model, ref_model, wrapped_tokenizer, dataset = _tiny_dpo_setup()
+    dpo_config = DPOConfig(
+        output_dir=str(tmp_path),
+        per_device_train_batch_size=2,
+        report_to=[],
+        use_cpu=True,
+        max_length=64,
+        gradient_checkpointing=False,
+    )
+    trainer = DPOTrainer(
+        model=model,
+        ref_model=ref_model,
+        args=dpo_config,
+        train_dataset=dataset,
+        processing_class=wrapped_tokenizer,
+    )
+
+    batch = next(iter(trainer.get_train_dataloader()))
+
+    # Right-padding: once a row's attention_mask hits 0 (padded), every later position in
+    # that row must also be 0 -- the mask never goes back to 1 after the first pad.
+    for row in batch["attention_mask"]:
+        seen_pad = False
+        for value in row.tolist():
+            if value == 0:
+                seen_pad = True
+            elif seen_pad:
+                pytest.fail("attention_mask has a real token after a padded position")
+
+
+def test_dpo_trainer_requires_an_explicit_ref_model_for_this_wrapper(tmp_path):
+    # Regression test for a real, confirmed bug: DPOTrainer's ref_model=None default tries
+    # to reload a fresh reference model from a Hub repo id derived from the policy model's
+    # config (create_model_from_path). Our wrapper is constructed directly in Python with
+    # no Hub repo id, so that path raises -- which is exactly why training/dpo.py always
+    # builds and passes a second TransformerLMForCausalLM instance explicitly.
+    model, _ref_model, wrapped_tokenizer, dataset = _tiny_dpo_setup()
+    dpo_config = DPOConfig(
+        output_dir=str(tmp_path),
+        per_device_train_batch_size=2,
+        report_to=[],
+        use_cpu=True,
+        max_length=64,
+        gradient_checkpointing=False,
+    )
+
+    with pytest.raises(Exception):
+        DPOTrainer(
+            model=model,
+            args=dpo_config,
+            train_dataset=dataset,
+            processing_class=wrapped_tokenizer,
+        )
