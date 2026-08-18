@@ -183,20 +183,36 @@ batch).
   masking alone prevents attending into a right-padded tail) — to be confirmed with a unit test
   asserting TRL's default DPO data collator right-pads, not left-pads, rather than assumed.
 - Tokenizer wrap: `PreTrainedTokenizerFast(tokenizer_object=<our Tokenizer>, pad_token="[PAD]",
-unk_token="[UNK]")` — trivial, since `tokenizers.Tokenizer` is literally what backs HF fast
-  tokenizers already.
+unk_token="[UNK]", eos_token="[PAD]")` — trivial, since `tokenizers.Tokenizer` is literally what
+  backs HF fast tokenizers already. `eos_token="[PAD]"` matters beyond labeling: see Dataset
+  formatting below.
 - Checkpoint loading reuses `checkpoint.py::load_checkpoint(path, wrapper.model)` unchanged — it
   already takes a generic `nn.Module`, so passing the wrapper's inner submodule requires no changes
   to that file.
 
-**Dataset formatting**: `chosen`/`rejected` text is formatted through the same `format_turn()`
-helper `data/chat.py` already uses for SFT, so DPO training sees exactly the same turn-tag
-convention (`<|user|>\n...\n<|assistant|>\n`, `{completion}\n[PAD]`) the model was originally
-fine-tuned on. Whether literal `"[PAD]"` text round-trips to the dedicated pad token id through
-this tokenizer (matching how SFT supervises the stop signal via a directly-appended token id,
-not text) is a to-be-verified detail at implementation time; if it doesn't round-trip cleanly,
-fall back to pre-tokenized `input_ids` fields, a DPO dataset format TRL also supports. Either way,
-the goal is the same: DPO training must not erode the clean-stop behavior SFT already taught.
+**Dataset formatting**: verified against current TRL source (`trainer/dpo_trainer.py`'s
+`_prepare_dataset`) — `DPOTrainer` _always_ tokenizes from raw `prompt`/`chosen`/`rejected` text;
+there is no pre-tokenized `input_ids` bypass (an earlier draft of this spec incorrectly assumed
+one). Two dataset formats are supported: "conversational" (`{role, content}` turns, templated via
+`tokenizer.apply_chat_template`) and "standard" (plain pre-formatted text). This pipeline uses
+**standard**: our tokenizer has no chat template configured, and authoring a Jinja template to
+match our exact `<|user|>\n...\n<|assistant|>\n` convention would be unplanned complexity for no
+benefit here. `pairs_dpo.jsonl`'s `prompt` field is formatted once, at `training/dpo.py` load
+time, as `format_turn("user", question) + "<|assistant|>\n"` (reusing `data/chat.py`'s
+`format_turn()` for the user turn); `chosen`/`rejected` stay the raw completion text, unmodified.
+
+For the stop signal: TRL's standard-format path automatically appends `tokenizer.eos_token` to
+`chosen`/`rejected` if not already present, before tokenizing (`_prepare_dataset`'s `add_eos`
+step) — which is exactly the role `[PAD]` already plays in this repo's SFT convention (a stop
+signal spliced after each assistant turn, itself supervised). Setting `eos_token="[PAD]"` on the
+wrapped tokenizer means this happens automatically; `training/dpo.py` doesn't need to hand-roll
+appending it. What's still a to-be-verified detail at implementation time: whether the literal
+text `"[PAD]"` round-trips to the dedicated pad token id when appended-then-encoded through this
+tokenizer (matching how SFT supervises the stop signal via a directly-appended token id, not
+text). If it doesn't round-trip cleanly, there's no TRL-provided bypass to fall back to — the
+fallback is to accept DPO training without explicit stop-signal reinforcement (a real but bounded
+degradation: the SFT-taught stopping behavior isn't actively unlearned, just not additionally
+reinforced during DPO), rather than inventing custom tokenization plumbing for a toy-scale run.
 
 **Reference model**: left to `DPOTrainer`'s default behavior (an internal frozen deep-copy of the
 policy model when no `ref_model`/PEFT config is passed) rather than hand-building a second wrapped
@@ -247,8 +263,10 @@ deliberate, manual, real-call startup self-check.
 
 ## Open questions carried into the implementation plan
 
-- Exact round-trip behavior of `"[PAD]"` literal text through the tokenizer (test first, per
-  fail-fast TDD, before committing to the text-based vs. pre-tokenized `chosen`/`rejected` format).
+- Exact round-trip behavior of `"[PAD]"` literal text through the tokenizer as an appended
+  `eos_token` (test first, per fail-fast TDD) — determines whether the wrapped tokenizer's
+  `eos_token="[PAD]"` setting actually reinforces the SFT-taught stop signal during DPO, or
+  whether that reinforcement is silently absent (acceptable degradation, not a blocker).
 - Confirm TRL's default DPO data collator right-pads (required for the `hf_wrapper.py`
   attention-mask-ignoring assumption to hold).
 - Fallback judge provider/model pair(s) to document for the startup self-check, in case
