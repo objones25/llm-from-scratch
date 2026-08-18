@@ -10,6 +10,7 @@ from pathlib import Path
 from huggingface_hub import InferenceClient
 
 from llmtrain.logging_config import configure_logging
+from llmtrain.training.config import TrainConfig
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +282,7 @@ def main() -> None:
     parser.add_argument("--judge-provider", type=str, default=DEFAULT_JUDGE_PROVIDER)
     parser.add_argument("--judge-model", type=str, default=DEFAULT_JUDGE_MODEL)
     parser.add_argument("--temperature", type=float, default=DEFAULT_JUDGE_TEMPERATURE)
-    parser.add_argument("--log-file", type=str, default="app.log")
+    parser.add_argument("--log-file", type=str, default=TrainConfig.log_file)
     args = parser.parse_args()
 
     configure_logging(log_file=args.log_file)

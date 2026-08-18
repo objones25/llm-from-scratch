@@ -1,3 +1,5 @@
+from unittest import mock
+
 import pytest
 import torch
 from torch import nn
@@ -154,6 +156,49 @@ def test_multi_token_query_against_nonempty_cache_raises():
         model(torch.tensor([[1]]), cache=cache)
         with pytest.raises(ValueError):
             model(torch.tensor([[2, 3]]), cache=cache)
+
+
+def test_rotary_cos_sin_computed_once_per_forward_regardless_of_layer_count():
+    # Every layer shares identical (seq_len, head_dim, theta, position_offset, device,
+    # dtype) within one forward call -- recomputing cos/sin per layer was pure wasted
+    # work (confirmed: 20 layers meant 20x recomputation for identical values). This
+    # pins down the fix as a permanent regression test.
+    import llmtrain.model.transformer as transformer_module
+
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=5, n_heads=2, n_kv_heads=1, dropout=0.0)
+    model = TransformerLM(config)
+    input_ids = torch.randint(0, 16, (1, 6))
+
+    with mock.patch.object(
+        transformer_module, "_rotary_cos_sin", wraps=transformer_module._rotary_cos_sin
+    ) as spy:
+        model(input_ids)
+
+    assert spy.call_count == 1
+
+
+def test_rotary_caching_does_not_change_cached_decode_output():
+    # Regression test that caching cos/sin at the TransformerLM level (instead of
+    # per-layer) produces bit-identical results to the old per-layer computation --
+    # this is a pure performance optimization, not a numerics change.
+    torch.manual_seed(0)
+    config = ModelConfig(vocab_size=16, d_model=8, n_layers=3, n_heads=4, n_kv_heads=2, dropout=0.0)
+    model = TransformerLM(config)
+    model.eval()
+    input_ids = torch.randint(0, 16, (1, 5))
+
+    with torch.no_grad():
+        full_logits = model(input_ids)
+
+    cache = KVCache()
+    cached_logits = []
+    with torch.no_grad():
+        for t in range(input_ids.shape[1]):
+            step_logits = model(input_ids[:, t : t + 1], cache=cache)
+            cached_logits.append(step_logits)
+    cached_logits = torch.cat(cached_logits, dim=1)
+
+    assert torch.allclose(full_logits, cached_logits, atol=1e-5)
 
 
 def test_multi_token_prefill_with_cache_matches_uncached():

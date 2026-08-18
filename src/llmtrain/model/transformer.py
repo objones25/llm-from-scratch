@@ -61,7 +61,8 @@ class CausalSelfAttention(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        position_offset: int = 0,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
         cache: KVCache | None = None,
         layer_idx: int = 0,
     ) -> torch.Tensor:
@@ -71,9 +72,6 @@ class CausalSelfAttention(nn.Module):
         k, v = kv.split(self.n_kv_heads * self.head_dim, dim=2)
         k = k.view(batch_size, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
         v = v.view(batch_size, seq_len, self.n_kv_heads, self.head_dim).transpose(1, 2)
-        cos, sin = _rotary_cos_sin(
-            seq_len, self.head_dim, self.rope_theta, position_offset, x.device, x.dtype
-        )
         q = apply_rotary(q, cos, sin)
         k = apply_rotary(k, cos, sin)
         if cache is not None:
@@ -120,13 +118,12 @@ class Block(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        position_offset: int = 0,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
         cache: KVCache | None = None,
         layer_idx: int = 0,
     ) -> torch.Tensor:
-        x = x + self.attn(
-            self.ln1(x), position_offset=position_offset, cache=cache, layer_idx=layer_idx
-        )
+        x = x + self.attn(self.ln1(x), cos=cos, sin=sin, cache=cache, layer_idx=layer_idx)
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -156,8 +153,17 @@ class TransformerLM(nn.Module):
     ) -> torch.Tensor:
         x = self.token_emb(input_ids)
         position_offset = cache.seq_len if cache is not None else 0
+        # cos/sin depend only on (seq_len, head_dim, rope_theta, position_offset, device,
+        # dtype) -- identical for every layer within one forward call, since all layers
+        # share the same config. Computed once here instead of once per layer (previously
+        # n_layers recomputations of the same values every forward call).
+        seq_len = input_ids.shape[1]
+        head_dim = self.config.d_model // self.config.n_heads
+        cos, sin = _rotary_cos_sin(
+            seq_len, head_dim, self.config.rope_theta, position_offset, x.device, x.dtype
+        )
         for layer_idx, block in enumerate(self.blocks):
-            x = block(x, position_offset=position_offset, cache=cache, layer_idx=layer_idx)
+            x = block(x, cos=cos, sin=sin, cache=cache, layer_idx=layer_idx)
         x = self.ln_f(x)
         if return_hidden:
             return x

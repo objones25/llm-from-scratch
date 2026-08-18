@@ -7,6 +7,8 @@ from pathlib import Path
 import torch
 from torch import nn
 
+from llmtrain.training.config import ModelConfig
+
 logger = logging.getLogger(__name__)
 
 _MAX_SAVE_ATTEMPTS = 3
@@ -84,3 +86,17 @@ def load_checkpoint(
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state"])
     return checkpoint["step"], checkpoint["dataset_state"], checkpoint.get("model_config")
+
+
+def load_model_config_from_checkpoint(path: str | Path, vocab_size: int) -> ModelConfig:
+    # Peek the checkpoint for its persisted model_config so architecture fields that
+    # change numerics without changing tensor shapes (e.g. rope_theta) can't silently
+    # drift from what the checkpoint was actually trained with. Older checkpoints saved
+    # before model_config was persisted fall back to ModelConfig() defaults. Was
+    # duplicated byte-for-byte across generate.py, generate_pairs.py, and
+    # training/dpo.py -- consolidated here as the single source of truth.
+    raw_checkpoint = torch.load(path, map_location="cpu")
+    saved_model_config = raw_checkpoint.get("model_config")
+    if saved_model_config is not None:
+        return ModelConfig(**{**saved_model_config, "vocab_size": vocab_size})
+    return ModelConfig(vocab_size=vocab_size)

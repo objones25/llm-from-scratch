@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 import torch
@@ -20,8 +21,12 @@ from llmtrain.model.hf_wrapper import (
     wrap_tokenizer,
 )
 from llmtrain.s3 import resolve_local_path, sibling_path
-from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
-from llmtrain.training.config import ModelConfig
+from llmtrain.training.checkpoint import (
+    load_checkpoint,
+    load_model_config_from_checkpoint,
+    save_checkpoint,
+)
+from llmtrain.training.config import TrainConfig
 
 logger = logging.getLogger(__name__)
 
@@ -48,15 +53,7 @@ def build_model_and_tokenizer(
     Tokenizer,
 ]:
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
-    raw_checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    saved_model_config = raw_checkpoint.get("model_config")
-    model_cfg = (
-        ModelConfig(**{**saved_model_config, "vocab_size": tokenizer.get_vocab_size()})
-        if saved_model_config is not None
-        else ModelConfig(vocab_size=tokenizer.get_vocab_size())
-    )
-    del raw_checkpoint
-
+    model_cfg = load_model_config_from_checkpoint(checkpoint_path, tokenizer.get_vocab_size())
     hf_config = TransformerLMConfig.from_model_config(model_cfg)
     model = TransformerLMForCausalLM(hf_config)
     load_checkpoint(checkpoint_path, model.model)
@@ -105,7 +102,14 @@ def build_dpo_config_from_args(args: argparse.Namespace) -> DPOConfig:
         # checkpointing is unnecessary; export_checkpoint() saves the final result once,
         # through the existing checkpoint format, after trainer.train() completes.
         save_strategy="no",
-        report_to=[],
+        # W&B owns training metrics project-wide (CLAUDE.md's Logging & observability
+        # section). report_to=["wandb"] enables HF Trainer's own WandbCallback, which
+        # auto-calls wandb.init/log/finish during trainer.train() -- no manual
+        # wandb.log() plumbing needed here, unlike train.py's hand-rolled loop, since
+        # DPOTrainer owns the training loop itself. Project/mode are set via the
+        # WANDB_PROJECT/WANDB_MODE env vars in main() (the mechanism HF's integration
+        # reads), not DPOConfig fields.
+        report_to=["wandb"],
     )
 
 
@@ -123,11 +127,19 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=DPOConfig.learning_rate)
     parser.add_argument("--num-train-epochs", type=int, default=int(DPOConfig.num_train_epochs))
     parser.add_argument("--max-length", type=int, default=DPOConfig.max_length)
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--log-file", type=str, default="app.log")
+    parser.add_argument("--batch-size", type=int, default=DPOConfig.per_device_train_batch_size)
+    parser.add_argument("--log-file", type=str, default=TrainConfig.log_file)
+    parser.add_argument("--wandb-project", type=str, default=TrainConfig.wandb_project)
+    parser.add_argument("--wandb-mode", type=str, default=TrainConfig.wandb_mode)
     args = parser.parse_args()
 
     configure_logging(log_file=args.log_file)
+    # HF Trainer's WandbCallback (enabled via report_to=["wandb"] in
+    # build_dpo_config_from_args) reads project/mode from these env vars, not from
+    # DPOConfig fields -- setdefault so an operator's own WANDB_PROJECT/WANDB_MODE (e.g.
+    # set in .env) still takes precedence over these CLI defaults.
+    os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
+    os.environ.setdefault("WANDB_MODE", args.wandb_mode)
 
     checkpoint_path = resolve_local_path(args.checkpoint)
     tokenizer_uri = args.tokenizer_path or sibling_path(args.checkpoint, "tokenizer.json")

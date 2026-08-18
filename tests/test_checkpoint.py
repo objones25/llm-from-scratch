@@ -7,7 +7,12 @@ from torch import nn
 
 import llmtrain.training.checkpoint as checkpoint_module
 from llmtrain.model.transformer import TransformerLM
-from llmtrain.training.checkpoint import load_checkpoint, prune_old_checkpoints, save_checkpoint
+from llmtrain.training.checkpoint import (
+    load_checkpoint,
+    load_model_config_from_checkpoint,
+    prune_old_checkpoints,
+    save_checkpoint,
+)
 from llmtrain.training.config import ModelConfig
 
 
@@ -127,6 +132,50 @@ def test_checkpoint_round_trip_preserves_model_config(tmp_path):
     _, _, loaded_model_config = load_checkpoint(checkpoint_path, new_model, new_optimizer)
 
     assert loaded_model_config == asdict(config)
+
+
+def test_load_model_config_from_checkpoint_reconstructs_persisted_architecture(tmp_path):
+    # Regression test pinning down the checkpoint->ModelConfig reconstruction block that
+    # was duplicated byte-for-byte across generate.py, generate_pairs.py, and
+    # training/dpo.py -- now a single shared helper all three call.
+    config = ModelConfig(
+        vocab_size=16,
+        d_model=8,
+        n_layers=2,
+        n_heads=2,
+        n_kv_heads=1,
+        dropout=0.0,
+        rope_theta=5000.0,
+    )
+    model = TransformerLM(config)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_checkpoint(checkpoint_path, model, optimizer, step=1)
+
+    loaded_config = load_model_config_from_checkpoint(checkpoint_path, vocab_size=999)
+
+    assert loaded_config == ModelConfig(
+        vocab_size=999,
+        d_model=8,
+        n_layers=2,
+        n_heads=2,
+        n_kv_heads=1,
+        dropout=0.0,
+        rope_theta=5000.0,
+    )
+
+
+def test_load_model_config_from_checkpoint_falls_back_to_defaults_for_older_checkpoints(tmp_path):
+    # Checkpoints saved before model_config was persisted (checkpoint["model_config"] is
+    # None) fall back to ModelConfig() defaults, same as generate.py's original behavior.
+    model = nn.Linear(4, 2)  # no `.config` attribute -- save_checkpoint stores model_config=None
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_checkpoint(checkpoint_path, model, optimizer, step=1)
+
+    loaded_config = load_model_config_from_checkpoint(checkpoint_path, vocab_size=123)
+
+    assert loaded_config == ModelConfig(vocab_size=123)
 
 
 def test_save_checkpoint_retries_transient_write_failure_and_succeeds(tmp_path, monkeypatch):

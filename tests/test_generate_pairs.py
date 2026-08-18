@@ -1,3 +1,6 @@
+import json
+import logging
+
 import torch
 from tokenizers import Tokenizer
 
@@ -13,7 +16,12 @@ def _tiny_setup() -> tuple[TransformerLM, Tokenizer]:
         vocab_size=64,
     )
     config = ModelConfig(
-        vocab_size=tokenizer.get_vocab_size(), d_model=8, n_layers=2, n_heads=2, n_kv_heads=1, dropout=0.0
+        vocab_size=tokenizer.get_vocab_size(),
+        d_model=8,
+        n_layers=2,
+        n_heads=2,
+        n_kv_heads=1,
+        dropout=0.0,
     )
     model = TransformerLM(config)
     return model, tokenizer
@@ -40,3 +48,31 @@ def test_generate_pairs_produces_two_completions_per_question():
     assert len(rows) == 2
     for row in rows:
         assert set(row.keys()) == {"prompt", "completion_a", "completion_b"}
+
+
+def test_generate_pairs_writes_rows_incrementally_to_output_path(tmp_path):
+    # Regression test: an earlier version held every row in memory and only wrote the
+    # output file once the whole run finished, so a crash mid-run lost all completed
+    # generation with no partial file to recover -- mirrors judge.py's already-fixed
+    # incremental-output pattern.
+    torch.manual_seed(0)
+    model, tokenizer = _tiny_setup()
+    config = GenerationConfig(max_new_tokens=5, temperature=0.7)
+    output_path = tmp_path / "pairs_raw.jsonl"
+
+    rows = generate_pairs(model, tokenizer, ["hello", "bye"], config, output_path=output_path)
+
+    written = [json.loads(line) for line in output_path.read_text().splitlines() if line.strip()]
+    assert written == rows
+
+
+def test_generate_pairs_logs_progress(caplog):
+    torch.manual_seed(0)
+    model, tokenizer = _tiny_setup()
+    config = GenerationConfig(max_new_tokens=5, temperature=0.7)
+
+    with caplog.at_level(logging.INFO, logger="llmtrain.generate_pairs"):
+        generate_pairs(model, tokenizer, ["hello", "bye"], config, progress_interval=1)
+
+    assert any("1/2" in record.message for record in caplog.records)
+    assert any("2/2" in record.message for record in caplog.records)

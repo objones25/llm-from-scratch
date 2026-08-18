@@ -7,8 +7,8 @@ from llmtrain.data.tokenizer import PAD_TOKEN
 from llmtrain.model.cache import KVCache
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.s3 import resolve_local_path, sibling_path
-from llmtrain.training.checkpoint import load_checkpoint
-from llmtrain.training.config import GenerationConfig, ModelConfig
+from llmtrain.training.checkpoint import load_checkpoint, load_model_config_from_checkpoint
+from llmtrain.training.config import GenerationConfig
 
 
 def _apply_repetition_penalty(
@@ -90,7 +90,9 @@ def generate_token_ids(
         input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
         pad_id = tokenizer.token_to_id(PAD_TOKEN)
 
-        cache = KVCache()
+        # Upper bound is known up front (generation stops early on PAD, never exceeds
+        # this) -- preallocating avoids a torch.cat reallocate+copy on every decode step.
+        cache = KVCache(max_seq_len=len(prompt_ids) + config.max_new_tokens)
         generated_ids = list(prompt_ids)
 
         def sample_next(logits: torch.Tensor) -> int:
@@ -160,16 +162,7 @@ def main() -> None:
     tokenizer_path = resolve_local_path(tokenizer_uri)
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
-    # Peek the checkpoint for its persisted model_config so architecture fields that change
-    # numerics without changing tensor shapes (e.g. rope_theta) can't silently drift from
-    # what the checkpoint was actually trained with. Older checkpoints saved before
-    # model_config was persisted fall back to ModelConfig() defaults, as before.
-    raw_checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    saved_model_config = raw_checkpoint.get("model_config")
-    if saved_model_config is not None:
-        model_cfg = ModelConfig(**{**saved_model_config, "vocab_size": tokenizer.get_vocab_size()})
-    else:
-        model_cfg = ModelConfig(vocab_size=tokenizer.get_vocab_size())
+    model_cfg = load_model_config_from_checkpoint(checkpoint_path, tokenizer.get_vocab_size())
     model = TransformerLM(model_cfg)
     load_checkpoint(checkpoint_path, model)
 

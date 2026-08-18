@@ -55,3 +55,9 @@ def test_build_dpo_config_from_args_maps_cli_flags_to_dpo_config_fields():
     assert dpo_config.per_device_train_batch_size == 8
     assert dpo_config.gradient_checkpointing is False
     assert dpo_config.save_strategy == "no"
+    # W&B owns training metrics project-wide (CLAUDE.md's Logging & observability
+    # section) -- DPO training was left with report_to=[] (no metric visibility during
+    # the run at all), a regression from that convention. report_to=["wandb"] lets HF
+    # Trainer's own WandbCallback auto-log per-step (no manual wandb.log needed, unlike
+    # train.py's hand-rolled loop, since DPOTrainer is off-the-shelf).
+    assert dpo_config.report_to == ["wandb"]

@@ -74,7 +74,19 @@ class TransformerLMForCausalLM(PreTrainedModel):
         # such parameter, relying purely on causal ordering. This is only correct because
         # DPO's batches are right-padded (confirmed in Task 4) -- causal masking alone then
         # prevents any real token from attending into the padded tail, the same property
-        # make_collate_fn's SFT collation already relies on.
+        # make_collate_fn's SFT collation already relies on. Enforced here (not just
+        # documented) since silently accepting a left-padded/interior-pad mask would
+        # produce wrong numerics with no error if this wrapper is ever reused elsewhere.
+        if (
+            attention_mask is not None
+            and attention_mask.shape[-1] > 1
+            and not torch.all(attention_mask[:, :-1] >= attention_mask[:, 1:])
+        ):
+            raise ValueError(
+                "TransformerLMForCausalLM.forward() relies on causal-only masking and "
+                "requires right-padded batches, but attention_mask has a real token "
+                "(1) after a padded position (0) in at least one row."
+            )
         logits = self.model(input_ids)
         return CausalLMOutputWithPast(logits=logits)
 

@@ -37,6 +37,31 @@ def test_forward_ignores_attention_mask_and_still_produces_gradients():
         assert param.grad is not None, f"{name} received no gradient"
 
 
+def test_forward_raises_on_left_padded_attention_mask():
+    # Regression test: forward() silently ignores attention_mask and relies purely on
+    # causal masking, which is only correct for right-padding (see the comment in
+    # TransformerLMForCausalLM.forward). A left-padded (or otherwise non-right-padded)
+    # mask would silently corrupt attention if not caught -- must raise instead.
+    hf_config = TransformerLMConfig.from_model_config(_tiny_model_config())
+    model = TransformerLMForCausalLM(hf_config)
+    input_ids = torch.randint(0, 16, (2, 5))
+    left_padded_mask = torch.tensor([[0, 0, 1, 1, 1], [1, 1, 1, 1, 1]])
+
+    with pytest.raises(ValueError, match="right-pad"):
+        model(input_ids=input_ids, attention_mask=left_padded_mask)
+
+
+def test_forward_accepts_right_padded_attention_mask():
+    hf_config = TransformerLMConfig.from_model_config(_tiny_model_config())
+    model = TransformerLMForCausalLM(hf_config)
+    input_ids = torch.randint(0, 16, (2, 5))
+    right_padded_mask = torch.tensor([[1, 1, 1, 0, 0], [1, 1, 1, 1, 1]])
+
+    output = model(input_ids=input_ids, attention_mask=right_padded_mask)
+
+    assert output.logits.shape == (2, 5, 16)
+
+
 def test_wrap_tokenizer_preserves_encode_decode_round_trip_and_sets_special_tokens():
     tokenizer = train_tokenizer(["hello world", "hello there"], vocab_size=50)
     wrapped = wrap_tokenizer(tokenizer)
@@ -81,7 +106,12 @@ def _tiny_dpo_setup():
     dataset = Dataset.from_dict(
         {
             "prompt": ["hello ", "hello ", "hello ", "hello "],
-            "chosen": ["world", "there friend, the quick brown fox jumps over", "world", "there friend"],
+            "chosen": [
+                "world",
+                "there friend, the quick brown fox jumps over",
+                "world",
+                "there friend",
+            ],
             "rejected": ["there", "world", "there", "world"],
         }
     )
