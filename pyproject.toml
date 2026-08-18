@@ -8,6 +8,8 @@ dependencies = [
     "tokenizers>=0.20",
     "datasets>=3.0",
     "wandb>=0.18",
+    "transformers>=5.15.0",
+    "trl>=1.10.0",
 ]
 
 [project.optional-dependencies]
