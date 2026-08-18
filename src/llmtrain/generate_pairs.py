@@ -1,6 +1,5 @@
 import argparse
 import json
-from pathlib import Path
 
 import torch
 from datasets import load_dataset
@@ -94,8 +93,7 @@ def main() -> None:
     rows = generate_pairs(model, tokenizer, questions, config)
 
     with open(args.output, "w") as f:
-        for row in rows:
-            f.write(json.dumps(row) + "\n")
+        f.writelines(json.dumps(row) + "\n" for row in rows)
 
 
 if __name__ == "__main__":
