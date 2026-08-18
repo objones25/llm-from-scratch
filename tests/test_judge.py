@@ -113,16 +113,35 @@ def test_judge_pair_discards_on_parse_failure():
 
 
 def test_judge_pair_discards_on_api_failure():
-    client = _FakeClient([RuntimeError("timeout")] * 6)
+    # Only 3 RuntimeErrors queued (not 6): the forward call exhausts its max_attempts=3
+    # retries and judge_pair short-circuits before ever attempting the swapped call.
+    client = _FakeClient([RuntimeError("timeout")] * 3)
     result = judge_pair(
         client,
         "some-model",
         "prompt",
         "completion_a text",
         "completion_b text",
+        retry_delay=0.0,
     )
     assert not result.kept
     assert result.discard_reason == "api_failure"
+
+
+def test_judge_pair_discards_degenerate_pairs_without_calling_the_judge():
+    # Zero responses queued -- any call to .create() would raise StopIteration, proving
+    # the judge is never actually invoked for a degenerate (identical) pair.
+    client = _FakeClient([])
+    result = judge_pair(client, "some-model", "prompt", "same text", "same text")
+    assert not result.kept
+    assert result.discard_reason == "degenerate_pair"
+
+
+def test_judge_pair_discards_blank_completions_without_calling_the_judge():
+    client = _FakeClient([])
+    result = judge_pair(client, "some-model", "prompt", "", "")
+    assert not result.kept
+    assert result.discard_reason == "degenerate_pair"
 
 
 def test_run_judge_pipeline_tallies_kept_and_discard_counts():
@@ -137,3 +156,17 @@ def test_run_judge_pipeline_tallies_kept_and_discard_counts():
     assert summary["kept"] == 1
     assert summary["discard_counts"]["position_bias_disagreement"] == 1
     assert kept == [{"prompt": "p1", "chosen": "a1", "rejected": "b1"}]
+
+
+def test_run_judge_pipeline_writes_kept_rows_incrementally_to_output_path(tmp_path):
+    client = _FakeClient([_verdict("A"), _verdict("B"), _verdict("A"), _verdict("A")])
+    rows = [
+        {"prompt": "p1", "completion_a": "a1", "completion_b": "b1"},
+        {"prompt": "p2", "completion_a": "a2", "completion_b": "b2"},
+    ]
+    output_path = tmp_path / "out.jsonl"
+
+    kept, _summary = run_judge_pipeline(client, "some-model", rows, output_path=output_path)
+
+    written = [json.loads(line) for line in output_path.read_text().splitlines() if line.strip()]
+    assert written == kept

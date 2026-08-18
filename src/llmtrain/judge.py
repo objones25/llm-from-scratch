@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,9 +45,17 @@ Guidelines:
   break the tie on correctness, then relevance, then clarity, in that order.
 - First write 1-2 sentences of reasoning, then give your verdict.
 
-Prompt: {prompt}
-Response A: {response_a}
-Response B: {response_b}"""
+<prompt>
+{prompt}
+</prompt>
+
+<response_a>
+{response_a}
+</response_a>
+
+<response_b>
+{response_b}
+</response_b>"""
 
 
 class JudgeParseError(Exception):
@@ -133,15 +142,24 @@ def judge_pair(
     completion_a: str,
     completion_b: str,
     temperature: float = DEFAULT_JUDGE_TEMPERATURE,
+    max_attempts: int = _MAX_JUDGE_ATTEMPTS,
+    retry_delay: float = _RETRY_DELAY_SECONDS,
 ) -> JudgeResult:
+    if completion_a == completion_b or not completion_a.strip() or not completion_b.strip():
+        return JudgeResult(kept=False, discard_reason="degenerate_pair")
     try:
-        forward = call_judge_with_retry(client, model, prompt, completion_a, completion_b, temperature)
-        swapped = call_judge_with_retry(client, model, prompt, completion_b, completion_a, temperature)
+        forward = call_judge_with_retry(
+            client, model, prompt, completion_a, completion_b, temperature, max_attempts, retry_delay
+        )
+        if forward is None:
+            return JudgeResult(kept=False, discard_reason="api_failure")
+        swapped = call_judge_with_retry(
+            client, model, prompt, completion_b, completion_a, temperature, max_attempts, retry_delay
+        )
+        if swapped is None:
+            return JudgeResult(kept=False, discard_reason="api_failure")
     except JudgeParseError:
         return JudgeResult(kept=False, discard_reason="parse_failure")
-
-    if forward is None or swapped is None:
-        return JudgeResult(kept=False, discard_reason="api_failure")
 
     # forward: A=completion_a, B=completion_b -> map the verdict back to which original
     # completion won. swapped: A=completion_b, B=completion_a -> same mapping, reversed.
@@ -164,21 +182,51 @@ def run_judge_pipeline(
     model: str,
     rows: list[dict],
     temperature: float = DEFAULT_JUDGE_TEMPERATURE,
+    max_attempts: int = _MAX_JUDGE_ATTEMPTS,
+    retry_delay: float = _RETRY_DELAY_SECONDS,
+    output_path: str | Path | None = None,
 ) -> tuple[list[dict], dict]:
     kept: list[dict] = []
-    discard_counts = {"position_bias_disagreement": 0, "parse_failure": 0, "api_failure": 0}
+    discard_counts = {
+        "position_bias_disagreement": 0,
+        "parse_failure": 0,
+        "api_failure": 0,
+        "degenerate_pair": 0,
+    }
     length_ratios: list[float] = []
-    for row in rows:
-        result = judge_pair(
-            client, model, row["prompt"], row["completion_a"], row["completion_b"], temperature
+    with ExitStack() as stack:
+        output_file = (
+            stack.enter_context(open(output_path, "w")) if output_path is not None else None
         )
-        if result.kept:
-            kept.append({"prompt": row["prompt"], "chosen": result.chosen, "rejected": result.rejected})
-            assert result.length_ratio is not None
-            length_ratios.append(result.length_ratio)
-        else:
-            assert result.discard_reason is not None
-            discard_counts[result.discard_reason] += 1
+        for i, row in enumerate(rows, start=1):
+            result = judge_pair(
+                client,
+                model,
+                row["prompt"],
+                row["completion_a"],
+                row["completion_b"],
+                temperature,
+                max_attempts,
+                retry_delay,
+            )
+            if result.kept:
+                kept_row = {
+                    "prompt": row["prompt"],
+                    "chosen": result.chosen,
+                    "rejected": result.rejected,
+                }
+                kept.append(kept_row)
+                assert result.length_ratio is not None
+                length_ratios.append(result.length_ratio)
+                if output_file is not None:
+                    output_file.write(json.dumps(kept_row) + "\n")
+                    output_file.flush()
+            else:
+                assert result.discard_reason is not None
+                discard_counts[result.discard_reason] += 1
+
+            if i % 50 == 0:
+                logger.info("judge pipeline progress: %d/%d processed, %d kept", i, len(rows), len(kept))
     summary = {
         "total": len(rows),
         "kept": len(kept),
@@ -217,14 +265,19 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging(log_file=args.log_file)
-    client = InferenceClient(provider=args.judge_provider, api_key=os.environ["HF_TOKEN"])
+    hf_token = os.environ.get("HF_TOKEN")
+    if not hf_token:
+        raise RuntimeError(
+            "HF_TOKEN environment variable is not set. Set it in .env and run with "
+            "`uv run --env-file .env ...`."
+        )
+    client = InferenceClient(provider=args.judge_provider, api_key=hf_token)
     _startup_self_check(client, args.judge_model, args.temperature)
 
     rows = [json.loads(line) for line in Path(args.input).read_text().splitlines() if line.strip()]
-    kept, summary = run_judge_pipeline(client, args.judge_model, rows, args.temperature)
-
-    with open(args.output, "w") as f:
-        f.writelines(json.dumps(row) + "\n" for row in kept)
+    _kept, summary = run_judge_pipeline(
+        client, args.judge_model, rows, args.temperature, output_path=args.output
+    )
 
     logger.info("judge pipeline complete", extra=summary)
     print(json.dumps(summary, indent=2))

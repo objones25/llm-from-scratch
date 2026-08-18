@@ -12,6 +12,7 @@ from llmtrain.model.transformer import TransformerLM
 from llmtrain.s3 import resolve_local_path, sibling_path
 from llmtrain.training.checkpoint import load_checkpoint
 from llmtrain.training.config import GenerationConfig, ModelConfig
+from llmtrain.training.train import select_device
 
 PROMPT_DATASET = "trl-lib/ultrafeedback-prompt"
 
@@ -78,6 +79,8 @@ def main() -> None:
 
     model = TransformerLM(model_cfg)
     load_checkpoint(checkpoint_path, model)
+    device = select_device()
+    model.to(device)
     model.eval()
 
     dataset = load_dataset(PROMPT_DATASET, split="train", streaming=True)
