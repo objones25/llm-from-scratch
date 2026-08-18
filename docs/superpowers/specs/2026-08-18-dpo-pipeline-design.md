@@ -180,8 +180,11 @@ batch).
   calling convention) but **not passed through** — `TransformerLM.forward()` has no such
   parameter at all, relying purely on causal ordering. This is only correct if DPO's batches are
   right-padded, the same assumption `make_collate_fn`'s SFT collation already relies on (causal
-  masking alone prevents attending into a right-padded tail) — to be confirmed with a unit test
-  asserting TRL's default DPO data collator right-pads, not left-pads, rather than assumed.
+  masking alone prevents attending into a right-padded tail). **Confirmed empirically**: a real
+  `DPOTrainer` built against a tiny instance of this wrapper, batch pulled via
+  `trainer.get_train_dataloader()`, right-pads every row (pad_id trails the real content in
+  `input_ids`, with `attention_mask` zeroed over the same trailing span) — pinned down as a
+  regression test in the implementation plan.
 - Tokenizer wrap: `PreTrainedTokenizerFast(tokenizer_object=<our Tokenizer>, pad_token="[PAD]",
 unk_token="[UNK]", eos_token="[PAD]")` — trivial, since `tokenizers.Tokenizer` is literally what
   backs HF fast tokenizers already. `eos_token="[PAD]"` matters beyond labeling: see Dataset
@@ -213,10 +216,22 @@ unaffected — the byte-level BPE tokenizer treats `[PAD]` as an added/special t
 what text immediately precedes it. No fallback is needed; this is pinned down as a regression
 test in the implementation plan rather than left as an open question.
 
-**Reference model**: left to `DPOTrainer`'s default behavior (an internal frozen deep-copy of the
-policy model when no `ref_model`/PEFT config is passed) rather than hand-building a second wrapped
-instance — simplest correct option, and the model is small enough that the extra frozen copy's
-memory cost on the A100 is a non-issue.
+**Reference model**: an earlier draft of this spec assumed `DPOTrainer`'s default (`ref_model=None`)
+would deep-copy the in-memory policy model. **That's wrong, confirmed by reading current TRL
+source** (`trainer/dpo_trainer.py`): when `ref_model is None` and the model isn't a PEFT model,
+`DPOTrainer` calls `create_model_from_path(get_config_model_id(self.model.config), ...)` — it
+*reloads* a fresh model from a Hub repo id/path derived from the policy model's config, rather than
+copying the already-loaded weights. Our wrapped model is constructed directly in Python with no
+Hub repo id, so `get_config_model_id` resolves to an empty string and this path raises
+`HFValidationError` (confirmed by triggering it against a tiny instance of `TransformerLMForCausalLM`).
+The fix, also confirmed working: construct and pass `ref_model=` explicitly — a second
+`TransformerLMForCausalLM` instance loaded from the same starting checkpoint weights
+(`ref_model.load_state_dict(model.state_dict())` right after both are constructed, before any
+training steps run). Passing `ref_model` explicitly takes a different branch in `DPOTrainer.__init__`
+that uses it as-is, never touching `create_model_from_path`. The model is small enough (431M
+params) that the extra frozen copy's memory cost on the A100 is a non-issue — the "simplest
+option" framing from the earlier draft still holds, it's just this explicit-construction form of
+it, not `ref_model=None`.
 
 **Hyperparameters** (`DPOConfig`, field names verified against current TRL docs): `beta=0.1`,
 `loss_type="sigmoid"` (the original Rafailov et al. DPO loss), `learning_rate` well below SFT's
@@ -265,7 +280,9 @@ deliberate, manual, real-call startup self-check.
 - ~~Exact round-trip behavior of `"[PAD]"` literal text through the tokenizer as an appended
   `eos_token`~~ — resolved (see Dataset formatting above); pinned down as a regression test in
   the implementation plan.
-- Confirm TRL's default DPO data collator right-pads (required for the `hf_wrapper.py`
-  attention-mask-ignoring assumption to hold).
+- ~~Confirm TRL's default DPO data collator right-pads~~ — resolved (see the `hf_wrapper.py`
+  bullet above); pinned down as a regression test in the implementation plan. Investigating this
+  also surfaced and fixed a real bug in this spec's original reference-model design — see
+  Reference model above.
 - Fallback judge provider/model pair(s) to document for the startup self-check, in case
   `together`/`Llama-3.3-70B-Instruct` stops honoring `response_format` at run time.
