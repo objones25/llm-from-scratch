@@ -135,7 +135,7 @@ def test_dpo_trainer_requires_an_explicit_ref_model_for_this_wrapper(tmp_path):
         gradient_checkpointing=False,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         DPOTrainer(
             model=model,
             args=dpo_config,
