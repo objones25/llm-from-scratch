@@ -81,10 +81,14 @@ def call_judge(
     response_b: str,
     temperature: float = DEFAULT_JUDGE_TEMPERATURE,
 ) -> dict:
-    completion = client.chat.completions.create(
+    # response_format's real types (ChatCompletionInputResponseFormatJSONSchema etc.) are
+    # dict subclasses (BaseInferenceType(dict)), so a plain dict is runtime-identical and
+    # matches HuggingFace's own documented usage — Pyright just can't see a bare dict as
+    # satisfying a dict-subclass type.
+    completion = client.chat.completions.create(  # pyright: ignore[reportCallIssue]
         model=model,
         messages=build_judge_messages(prompt, response_a, response_b),
-        response_format={"type": "json_schema", "json_schema": JUDGE_JSON_SCHEMA},
+        response_format={"type": "json_schema", "json_schema": JUDGE_JSON_SCHEMA},  # pyright: ignore[reportArgumentType]
         temperature=temperature,
     )
     content = completion.choices[0].message.content
@@ -149,12 +153,26 @@ def judge_pair(
         return JudgeResult(kept=False, discard_reason="degenerate_pair")
     try:
         forward = call_judge_with_retry(
-            client, model, prompt, completion_a, completion_b, temperature, max_attempts, retry_delay
+            client,
+            model,
+            prompt,
+            completion_a,
+            completion_b,
+            temperature,
+            max_attempts,
+            retry_delay,
         )
         if forward is None:
             return JudgeResult(kept=False, discard_reason="api_failure")
         swapped = call_judge_with_retry(
-            client, model, prompt, completion_b, completion_a, temperature, max_attempts, retry_delay
+            client,
+            model,
+            prompt,
+            completion_b,
+            completion_a,
+            temperature,
+            max_attempts,
+            retry_delay,
         )
         if swapped is None:
             return JudgeResult(kept=False, discard_reason="api_failure")
@@ -226,7 +244,9 @@ def run_judge_pipeline(
                 discard_counts[result.discard_reason] += 1
 
             if i % 50 == 0:
-                logger.info("judge pipeline progress: %d/%d processed, %d kept", i, len(rows), len(kept))
+                logger.info(
+                    "judge pipeline progress: %d/%d processed, %d kept", i, len(rows), len(kept)
+                )
     summary = {
         "total": len(rows),
         "kept": len(kept),

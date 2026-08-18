@@ -7,11 +7,18 @@ import torch
 from datasets import Dataset
 from tokenizers import Tokenizer
 from transformers import PreTrainedTokenizerFast
-from trl import DPOConfig, DPOTrainer
+from trl import (
+    DPOConfig,  # type: ignore
+    DPOTrainer,  # type: ignore
+)
 
 from llmtrain.data.chat import format_turn
 from llmtrain.logging_config import configure_logging
-from llmtrain.model.hf_wrapper import TransformerLMConfig, TransformerLMForCausalLM, wrap_tokenizer
+from llmtrain.model.hf_wrapper import (
+    TransformerLMConfig,
+    TransformerLMForCausalLM,
+    wrap_tokenizer,
+)
 from llmtrain.s3 import resolve_local_path, sibling_path
 from llmtrain.training.checkpoint import load_checkpoint, save_checkpoint
 from llmtrain.training.config import ModelConfig
@@ -34,7 +41,12 @@ def load_dpo_dataset(path: str | Path) -> Dataset:
 
 def build_model_and_tokenizer(
     checkpoint_path: Path, tokenizer_path: Path
-) -> tuple[TransformerLMForCausalLM, TransformerLMForCausalLM, PreTrainedTokenizerFast, Tokenizer]:
+) -> tuple[
+    TransformerLMForCausalLM,
+    TransformerLMForCausalLM,
+    PreTrainedTokenizerFast,
+    Tokenizer,
+]:
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
     raw_checkpoint = torch.load(checkpoint_path, map_location="cpu")
     saved_model_config = raw_checkpoint.get("model_config")
@@ -60,7 +72,10 @@ def build_model_and_tokenizer(
 
 
 def export_checkpoint(
-    model: TransformerLMForCausalLM, tokenizer: Tokenizer, checkpoint_dir: Path, step: int
+    model: TransformerLMForCausalLM,
+    tokenizer: Tokenizer,
+    checkpoint_dir: Path,
+    step: int,
 ) -> None:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     # A throwaway optimizer -- save_checkpoint requires one, but generate.py (the only
@@ -96,7 +111,9 @@ def build_dpo_config_from_args(args: argparse.Namespace) -> DPOConfig:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="DPO-tune a checkpoint on judged preference pairs")
-    parser.add_argument("--checkpoint", type=str, required=True, help="SFT checkpoint to start from")
+    parser.add_argument(
+        "--checkpoint", type=str, required=True, help="SFT checkpoint to start from"
+    )
     parser.add_argument("--tokenizer-path", type=str, default=None)
     parser.add_argument("--pairs", type=str, required=True, help="path to pairs_dpo.jsonl")
     parser.add_argument("--checkpoint-dir", type=str, required=True, help="output directory")
