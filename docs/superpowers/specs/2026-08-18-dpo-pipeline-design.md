@@ -206,13 +206,12 @@ For the stop signal: TRL's standard-format path automatically appends `tokenizer
 step) — which is exactly the role `[PAD]` already plays in this repo's SFT convention (a stop
 signal spliced after each assistant turn, itself supervised). Setting `eos_token="[PAD]"` on the
 wrapped tokenizer means this happens automatically; `training/dpo.py` doesn't need to hand-roll
-appending it. What's still a to-be-verified detail at implementation time: whether the literal
-text `"[PAD]"` round-trips to the dedicated pad token id when appended-then-encoded through this
-tokenizer (matching how SFT supervises the stop signal via a directly-appended token id, not
-text). If it doesn't round-trip cleanly, there's no TRL-provided bypass to fall back to — the
-fallback is to accept DPO training without explicit stop-signal reinforcement (a real but bounded
-degradation: the SFT-taught stopping behavior isn't actively unlearned, just not additionally
-reinforced during DPO), rather than inventing custom tokenization plumbing for a toy-scale run.
+appending it. **Confirmed empirically** (`train_tokenizer` on a small fake corpus,
+`tokenizer.encode("hello world" + PAD_TOKEN).ids`): the literal text `"[PAD]"` round-trips
+cleanly to the dedicated pad token id as the final token, with the preceding text's encoding
+unaffected — the byte-level BPE tokenizer treats `[PAD]` as an added/special token regardless of
+what text immediately precedes it. No fallback is needed; this is pinned down as a regression
+test in the implementation plan rather than left as an open question.
 
 **Reference model**: left to `DPOTrainer`'s default behavior (an internal frozen deep-copy of the
 policy model when no `ref_model`/PEFT config is passed) rather than hand-building a second wrapped
@@ -263,10 +262,9 @@ deliberate, manual, real-call startup self-check.
 
 ## Open questions carried into the implementation plan
 
-- Exact round-trip behavior of `"[PAD]"` literal text through the tokenizer as an appended
-  `eos_token` (test first, per fail-fast TDD) — determines whether the wrapped tokenizer's
-  `eos_token="[PAD]"` setting actually reinforces the SFT-taught stop signal during DPO, or
-  whether that reinforcement is silently absent (acceptable degradation, not a blocker).
+- ~~Exact round-trip behavior of `"[PAD]"` literal text through the tokenizer as an appended
+  `eos_token`~~ — resolved (see Dataset formatting above); pinned down as a regression test in
+  the implementation plan.
 - Confirm TRL's default DPO data collator right-pads (required for the `hf_wrapper.py`
   attention-mask-ignoring assumption to hold).
 - Fallback judge provider/model pair(s) to document for the startup self-check, in case
