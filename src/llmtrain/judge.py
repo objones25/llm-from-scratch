@@ -204,7 +204,13 @@ def run_judge_pipeline(
     max_attempts: int = _MAX_JUDGE_ATTEMPTS,
     retry_delay: float = _RETRY_DELAY_SECONDS,
     output_path: str | Path | None = None,
+    resume_from: int = 0,
 ) -> tuple[list[dict], dict]:
+    # resume_from skips rows already processed in a prior (interrupted) run of this same
+    # rows list -- callers always pass the full rows list, never a truncated one; the
+    # skip happens here so `i` stays comparable across runs. output_path opens in append
+    # mode when resuming so already-written kept rows survive instead of being truncated
+    # (real scenario this was built for: an HF Inference Providers 402 mid-run).
     kept: list[dict] = []
     discard_counts = {
         "position_bias_disagreement": 0,
@@ -213,11 +219,14 @@ def run_judge_pipeline(
         "degenerate_pair": 0,
     }
     length_ratios: list[float] = []
+    progress_path = Path(f"{output_path}.progress") if output_path is not None else None
     with ExitStack() as stack:
         output_file = (
-            stack.enter_context(open(output_path, "w")) if output_path is not None else None
+            stack.enter_context(open(output_path, "a" if resume_from else "w"))
+            if output_path is not None
+            else None
         )
-        for i, row in enumerate(rows, start=1):
+        for i, row in enumerate(rows[resume_from:], start=resume_from + 1):
             result = judge_pair(
                 client,
                 model,
@@ -244,12 +253,22 @@ def run_judge_pipeline(
                 assert result.discard_reason is not None
                 discard_counts[result.discard_reason] += 1
 
+            if progress_path is not None:
+                progress_path.write_text(str(i))
+
             if i % 50 == 0:
                 logger.info(
                     "judge pipeline progress: %d/%d processed, %d kept", i, len(rows), len(kept)
                 )
+        # Reached only if every remaining row was processed without an unhandled
+        # exception propagating out -- safe to drop the resume marker. An interruption
+        # (Ctrl-C, a real crash) skips this line, leaving the marker for the next
+        # --resume run to pick up from.
+        if progress_path is not None:
+            progress_path.unlink(missing_ok=True)
     summary = {
         "total": len(rows),
+        "resumed_from": resume_from,
         "kept": len(kept),
         "discard_counts": discard_counts,
         "mean_length_ratio": sum(length_ratios) / len(length_ratios) if length_ratios else None,
@@ -283,6 +302,15 @@ def main() -> None:
     parser.add_argument("--judge-model", type=str, default=DEFAULT_JUDGE_MODEL)
     parser.add_argument("--temperature", type=float, default=DEFAULT_JUDGE_TEMPERATURE)
     parser.add_argument("--log-file", type=str, default=TrainConfig.log_file)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "resume an interrupted run: skip rows already processed (tracked in "
+            "<output>.progress) and append to --output instead of overwriting it. "
+            "Requires --input to be the exact same pairs_raw.jsonl as the interrupted run."
+        ),
+    )
     args = parser.parse_args()
 
     configure_logging(log_file=args.log_file)
@@ -296,8 +324,18 @@ def main() -> None:
     _startup_self_check(client, args.judge_model, args.temperature)
 
     rows = [json.loads(line) for line in Path(args.input).read_text().splitlines() if line.strip()]
+    resume_from = 0
+    progress_path = Path(f"{args.output}.progress")
+    if args.resume and progress_path.exists():
+        resume_from = int(progress_path.read_text().strip())
+        logger.info("resuming judge pipeline from row %d/%d", resume_from, len(rows))
     _kept, summary = run_judge_pipeline(
-        client, args.judge_model, rows, args.temperature, output_path=args.output
+        client,
+        args.judge_model,
+        rows,
+        args.temperature,
+        output_path=args.output,
+        resume_from=resume_from,
     )
 
     logger.info("judge pipeline complete", extra=summary)

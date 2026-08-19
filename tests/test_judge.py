@@ -170,3 +170,72 @@ def test_run_judge_pipeline_writes_kept_rows_incrementally_to_output_path(tmp_pa
 
     written = [json.loads(line) for line in output_path.read_text().splitlines() if line.strip()]
     assert written == kept
+
+
+def test_run_judge_pipeline_writes_a_progress_marker_and_clears_it_on_completion(tmp_path):
+    client = _FakeClient([_verdict("A"), _verdict("B"), _verdict("A"), _verdict("B")])
+    rows = [
+        {"prompt": "p1", "completion_a": "a1", "completion_b": "b1"},
+        {"prompt": "p2", "completion_a": "a2", "completion_b": "b2"},
+    ]
+    output_path = tmp_path / "out.jsonl"
+    progress_path = tmp_path / "out.jsonl.progress"
+
+    run_judge_pipeline(client, "some-model", rows, output_path=output_path)
+
+    # A full, uninterrupted run leaves no stale marker behind -- a later --resume run
+    # against a fresh (unrelated) --input shouldn't accidentally skip rows.
+    assert not progress_path.exists()
+
+
+def test_run_judge_pipeline_resume_skips_already_processed_rows_and_appends(tmp_path):
+    # Regression test for the real scenario this was built for: an HF Inference
+    # Providers 402 (out of credits) mid-run, interrupted, then retried after adding
+    # credits. Resuming must not re-pay to re-judge already-processed rows, and must not
+    # destroy the output already paid for.
+    output_path = tmp_path / "out.jsonl"
+    rows = [
+        {"prompt": "p1", "completion_a": "a1", "completion_b": "b1"},
+        {"prompt": "p2", "completion_a": "a2", "completion_b": "b2"},
+        {"prompt": "p3", "completion_a": "a3", "completion_b": "b3"},
+    ]
+
+    # "First run": only gets through row 1 before the process is interrupted.
+    first_client = _FakeClient([_verdict("A"), _verdict("B")])
+    run_judge_pipeline(first_client, "some-model", rows[:1], output_path=output_path)
+    written_after_first_run = output_path.read_text()
+    assert written_after_first_run  # sanity: row 1 was actually kept and written
+
+    # "Resume": full row list again, but resume_from=1 skips row 1 (already processed)
+    # and appends instead of truncating.
+    second_client = _FakeClient([_verdict("A"), _verdict("B"), _verdict("A"), _verdict("B")])
+    kept, summary = run_judge_pipeline(
+        second_client, "some-model", rows, output_path=output_path, resume_from=1
+    )
+
+    final_content = output_path.read_text()
+    assert final_content.startswith(written_after_first_run)
+    written_rows = [json.loads(line) for line in final_content.splitlines() if line.strip()]
+    assert written_rows[0]["prompt"] == "p1"
+    assert {r["prompt"] for r in written_rows[1:]} == {"p2", "p3"}
+    assert summary["resumed_from"] == 1
+    assert summary["total"] == 3
+    assert kept == written_rows[1:]
+
+
+def test_run_judge_pipeline_progress_marker_survives_an_unhandled_error_mid_run(tmp_path):
+    # Simulates the real crash scenario (process killed mid-run, e.g. by Ctrl-C or a
+    # genuinely unexpected error) as opposed to a gracefully-discarded row: the progress
+    # marker must reflect exactly how far it got, not get silently cleared or corrupted.
+    client = _FakeClient([_verdict("A"), _verdict("B")])
+    rows = [
+        {"prompt": "p1", "completion_a": "a1", "completion_b": "b1"},
+        {"prompt": "p2", "completion_a": "a2"},  # malformed: missing completion_b
+    ]
+    output_path = tmp_path / "out.jsonl"
+    progress_path = tmp_path / "out.jsonl.progress"
+
+    with pytest.raises(KeyError):
+        run_judge_pipeline(client, "some-model", rows, output_path=output_path)
+
+    assert progress_path.read_text().strip() == "1"
