@@ -1,3 +1,6 @@
+from tokenizers import Tokenizer
+
+from llmtrain.data.chat import format_chat_history
 from llmtrain.training.config import GenerationConfig
 
 _VALID_ROLES = ("user", "assistant")
@@ -42,3 +45,19 @@ def parse_generation_config(payload: dict) -> GenerationConfig:
         top_k=int(payload.get("top_k", GenerationConfig.top_k)),
         top_p=float(payload.get("top_p", GenerationConfig.top_p)),
     )
+
+
+def truncate_to_context_window(
+    tokenizer: Tokenizer,
+    messages: list[dict],
+    max_new_tokens: int,
+    max_seq_len: int,
+) -> list[dict]:
+    messages = list(messages)
+    while True:
+        prompt_len = len(tokenizer.encode(format_chat_history(messages)).ids)
+        if prompt_len + max_new_tokens <= max_seq_len:
+            return messages
+        if len(messages) <= 1:
+            raise ValueError("prompt exceeds max_seq_len even after truncating all prior turns")
+        messages = messages[2:]  # drop the oldest user/assistant turn-pair, never mid-turn
