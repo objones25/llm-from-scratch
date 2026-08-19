@@ -1,13 +1,96 @@
 # llm-training
 
-A small language model built from scratch — custom transformer, tokenizer training, streaming
-data pipeline, training loop, checkpointing, and KV-cache generation — pretrained on
-[`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu), then
-SFT'd on `HuggingFaceTB/smoltalk` and DPO-tuned on judged preference pairs, using Hugging Face
-`tokenizers`/`transformers`/`trl` and PyTorch. This is a toy/educational project, not a
-production framework: one model architecture, one training script per stage, no config-file
-layer, no multi-GPU orchestration, no serving stack. Local development and smoke testing run on
-a Mac (MPS/CPU); the real training runs happen on a rented RunPod A100 GPU.
+A decoder-only transformer language model, built and trained from scratch on a single rented
+GPU — not a fine-tune of an existing model. This repo implements the full pipeline: a custom
+transformer and tokenizer, a streaming training loop, checkpointing, and KV-cache generation,
+pretrained on [`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu),
+then supervised-fine-tuned on `HuggingFaceTB/smoltalk` and DPO preference-tuned on top of that.
+
+This is a toy/educational project, intentionally small in scope and budget — one model
+architecture, one training script per stage, no config-file layer, no multi-GPU orchestration,
+no serving stack — and the model itself is correspondingly limited. See
+[Example output](#example-output) below for what it can and can't actually do before judging it
+by the architecture list. Local development and smoke testing run on a Mac (MPS/CPU); real
+training happens on a rented RunPod A100 GPU.
+
+## Example output
+
+From the current best checkpoint (`dpo-checkpoints/step_176.pt`: pretrained on ~9.7B tokens of
+`fineweb-edu`, SFT'd on `smoltalk`, DPO-tuned for 1 epoch on 1,403 judged preference pairs — see
+[`docs/dpo-run-results.md`](docs/dpo-run-results.md) for the full run):
+
+```bash
+$ uv run python -m llmtrain.generate --checkpoint dpo-checkpoints/step_176.pt \
+    --chat --prompt "What's the capital of France?" --max-new-tokens 150 --temperature 0.0
+
+The capital of France is Paris.
+```
+
+```bash
+$ uv run python -m llmtrain.generate --checkpoint dpo-checkpoints/step_176.pt \
+    --chat --prompt "What is the opposite of down?" --max-new-tokens 150 --temperature 0.0
+
+The opposite of a number is the opposite of that number. In other words, if a number is -1,
+then it is also -2, -3, -4, -5, and so on. This concept is often used to describe the
+relationship between two or more numbers.
+```
+
+The first prompt is representative of what this model does well: fluent, on-topic, correct
+answers to simple factual questions that are heavily represented in training data. The second
+shows the actual ceiling: "opposite" gets pattern-matched toward a math-flavored explanation
+about negative numbers rather than understood as "antonym of a direction word" — grammatical
+and confident, but wrong. That's not a bug to fix; it's the expected result of the numbers
+involved — a 478.6M-parameter model, ~9.7B pretraining tokens, and DPO on 1,403 preference
+pairs (production RLHF/DPO runs use hundreds of thousands to millions of pairs) — all sized to
+a single rented A100's cost budget, not to task performance. Treat this project as a
+demonstration that the full pretrain → SFT → DPO pipeline works correctly end to end, not as a
+general-purpose assistant.
+
+## Why this model size
+
+478.6M parameters and ~9.7B pretraining tokens is the result of two Chinchilla-driven
+scale-ups, not a number picked upfront. [Hoffmann et al. 2022, "Chinchilla"](https://arxiv.org/abs/2203.15556)
+found that for a fixed training-compute budget (`FLOPs ≈ 6·N·D`, `N` = non-embedding
+params, `D` = tokens), loss is minimized at roughly `D/N ≈ 20` tokens per parameter —
+past that ratio, more compute is better spent on a bigger model than more tokens on the
+same one. This project deliberately trains a bit *past* Chinchilla-optimal anyway (the
+LLaMA-popularized approach): an overtrained small model costs more to train per unit of
+loss improvement than the Chinchilla-optimal point, but is cheaper to run at inference —
+and inference cost/quality, not training-FLOPs efficiency, is what matters for a model
+meant to actually be used afterward.
+
+| Run | Non-embedding params | Architecture | Tokens | Tokens/param | Budget → Chinchilla target |
+| --- | --- | --- | --- | --- | --- |
+| v0 (original) | 75.5M | `d_model=768, n_layers=12, n_heads=12, n_kv_heads=4` | 5.24B | 69 | — |
+| v1 (scale-up 1) | 220.2M | `d_model=1024, n_layers=20, n_heads=16, n_kv_heads=4` | 5.51B | 25.0 | ~$50 → N\*≈244M |
+| v2 (scale-up 2, current) | 431.4M | `d_model=1440, n_layers=20, n_heads=20, n_kv_heads=4` | 9.70B | 22.5 | ~$160 → N\*≈457M |
+
+Each scale-up was triggered by the same empirical signal in the previous run's `val_loss`
+curve, not a fixed schedule: a "flat tail," where the last few hundred steps barely move
+`val_loss` at all. v0 dropped only 0.0050 in its final 500 steps; v1 — 3x bigger and much
+closer to Chinchilla-optimal (25 vs. 69 tokens/param) — dropped an almost identical 0.0052
+(`plots/chinchilla-comparison.png`). That reproduction is the signature of a model that's
+run out of capacity to extract more signal from more data, not one that just needs more
+steps — full diagnosis, including weight/activation health checks that ruled out a
+training bug as an alternative explanation (no dead neurons, no collapsed layers), in
+[`docs/pretrain-sft-scale-analysis.md`](docs/pretrain-sft-scale-analysis.md).
+
+The v1→v2 scale-up also settled a width-vs-depth question: that same analysis found block
+0 does most of the work converting token embeddings into features (~0.15 cosine
+similarity between its input and output) while blocks 1–19 barely nudge the residual
+stream (0.89–0.97 cosine similarity) — a sign that blindly adding more layers risks
+near-identity pass-throughs rather than real capacity. v2 grows only width (`d_model`
+1024→1440, `n_heads` 16→20) and holds depth at 20 layers rather than gambling on that.
+
+v2 is the architecture behind every SFT/DPO checkpoint in this repo (see
+[Example output](#example-output) above) — sized to a ~$160 RunPod budget, not to a target
+quality bar. Full sizing math and the architecture-grid search (head-dimension
+divisibility/hardware-friendliness constraints) are in
+[`docs/superpowers/specs/2026-08-09-model-scale-up-design.md`](docs/superpowers/specs/2026-08-09-model-scale-up-design.md)
+(v0→v1) and
+[`docs/superpowers/specs/2026-08-13-model-scale-up-v2-design.md`](docs/superpowers/specs/2026-08-13-model-scale-up-v2-design.md)
+(v1→v2); loss/LR/grad-norm curves for all three runs are `plots/pretraining.png`,
+`plots/pretraining-scaleup.png`, and `plots/pretraining-scaleup-v2.png`.
 
 ## Architecture highlights
 
@@ -75,11 +158,14 @@ WANDB_API_KEY=...
 Never commit `.env` — it's already in `.gitignore`. Load it into any command with
 `uv run --env-file .env <command>`.
 
-## Quick example: local smoke test
+## Verify the pipeline runs (local smoke test)
 
-This is a fast, tiny-scale smoke test on `tiny_shakespeare` — enough to confirm the pipeline
-runs end-to-end on a Mac, not a meaningful training run. For the RunPod pod runbook (setup,
-and the exact commands to run pretraining → SFT → DPO), see
+A fast, tiny-scale run on `tiny_shakespeare` that checks the code path works end-to-end on your
+Mac before you spend money on a GPU rental. **This is an infrastructure check, not a
+demonstration of model quality** — see [Example output](#example-output) above for that; at 30
+steps on 472 rows the output here is expected to be incoherent.
+
+For the RunPod pod runbook (setup, and the exact commands to run pretraining → SFT → DPO), see
 [`docs/training-guide.md`](docs/training-guide.md).
 
 Train for 30 steps:
@@ -97,9 +183,6 @@ Generate from the resulting checkpoint:
 uv run python -m llmtrain.generate --checkpoint /tmp/smoke-test/step_30.pt \
   --prompt "Once upon a time" --max-new-tokens 20
 ```
-
-At this scale (30 steps, 472 training rows, default `temperature=1.0`) the output will be
-largely incoherent — that's expected, not a bug; see Known limitations below.
 
 ## Datasets
 
