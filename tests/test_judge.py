@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 
@@ -170,6 +171,20 @@ def test_run_judge_pipeline_writes_kept_rows_incrementally_to_output_path(tmp_pa
 
     written = [json.loads(line) for line in output_path.read_text().splitlines() if line.strip()]
     assert written == kept
+
+
+def test_run_judge_pipeline_logs_progress_at_the_configured_interval(caplog):
+    client = _FakeClient([_verdict("A"), _verdict("B"), _verdict("A"), _verdict("A")])
+    rows = [
+        {"prompt": "p1", "completion_a": "a1", "completion_b": "b1"},
+        {"prompt": "p2", "completion_a": "a2", "completion_b": "b2"},
+    ]
+
+    with caplog.at_level(logging.INFO, logger="llmtrain.judge"):
+        run_judge_pipeline(client, "some-model", rows, progress_interval=1)
+
+    assert any("1/2" in record.message for record in caplog.records)
+    assert any("2/2" in record.message for record in caplog.records)
 
 
 def test_run_judge_pipeline_writes_a_progress_marker_and_clears_it_on_completion(tmp_path):

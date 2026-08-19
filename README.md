@@ -1,12 +1,13 @@
 # llm-training
 
 A small language model built from scratch — custom transformer, tokenizer training, streaming
-data pipeline, training loop, checkpointing, and KV-cache generation — trained on
-[`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) using
-Hugging Face `tokenizers` and PyTorch. This is a toy/educational project, not a production
-framework: one model architecture, one training script, no config-file layer, no multi-GPU
-orchestration, no serving stack. Local development and smoke testing run on a Mac (MPS/CPU);
-the real pretraining run happens on a rented RunPod A100 GPU.
+data pipeline, training loop, checkpointing, and KV-cache generation — pretrained on
+[`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu), then
+SFT'd on `HuggingFaceTB/smoltalk` and DPO-tuned on judged preference pairs, using Hugging Face
+`tokenizers`/`transformers`/`trl` and PyTorch. This is a toy/educational project, not a
+production framework: one model architecture, one training script per stage, no config-file
+layer, no multi-GPU orchestration, no serving stack. Local development and smoke testing run on
+a Mac (MPS/CPU); the real training runs happen on a rented RunPod A100 GPU.
 
 ## Architecture highlights
 
@@ -77,9 +78,9 @@ Never commit `.env` — it's already in `.gitignore`. Load it into any command w
 ## Quick example: local smoke test
 
 This is a fast, tiny-scale smoke test on `tiny_shakespeare` — enough to confirm the pipeline
-runs end-to-end on a Mac, not a meaningful training run. For the full walkthrough (A100 smoke
-test on `reformer_enwik8`, the real `fineweb_edu` pretraining run, RunPod setup, and
-troubleshooting), see [`docs/training-guide.md`](docs/training-guide.md).
+runs end-to-end on a Mac, not a meaningful training run. For the RunPod pod runbook (setup,
+and the exact commands to run pretraining → SFT → DPO), see
+[`docs/training-guide.md`](docs/training-guide.md).
 
 Train for 30 steps:
 
@@ -102,16 +103,17 @@ largely incoherent — that's expected, not a bug; see Known limitations below.
 
 ## Datasets
 
-| Dataset                     | Purpose                                                                                                                                                                                                                             |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Trelis/tiny-shakespeare`   | Local smoke test (Mac/MPS) — fast, no GPU rental. Its text column is `Text` (capital T); `data/streaming.py` renames it to `text`. Only 472 train rows — enough for a short smoke test, not for `--resume` (see Known limitations). |
-| `reds0510/enwik8-processed` | 15-minute A100 smoke test — 1.1M rows, real-scale enough for `--resume` to behave correctly.                                                                                                                                        |
-| `HuggingFaceFW/fineweb-edu` | Main pretraining corpus. `name="sample-100BT"`, `split="train"`, `streaming=True` — never downloaded in full.                                                                                                                       |
-| `HuggingFaceTB/smoltalk`    | SFT (supervised fine-tuning) after pretraining.                                                                                                                                                                                     |
-| `HuggingFaceH4/no_robots`   | Quick sanity checks (small, fast to iterate on).                                                                                                                                                                                    |
+| Dataset                        | Purpose                                                                                                                                                                                                                             |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Trelis/tiny-shakespeare`      | Local smoke test (Mac/MPS) — fast, no GPU rental. Its text column is `Text` (capital T); `data/streaming.py` renames it to `text`. Only 472 train rows — enough for a short smoke test, not for `--resume` (see Known limitations). |
+| `reds0510/enwik8-processed`    | 15-minute A100 smoke test — 1.1M rows, real-scale enough for `--resume` to behave correctly.                                                                                                                                        |
+| `HuggingFaceFW/fineweb-edu`    | Main pretraining corpus. `name="sample-100BT"`, `split="train"`, `streaming=True` — never downloaded in full.                                                                                                                       |
+| `HuggingFaceTB/smoltalk`       | SFT (supervised fine-tuning) after pretraining.                                                                                                                                                                                     |
+| `HuggingFaceH4/no_robots`      | Quick SFT sanity check (small, fast to iterate on) before committing to the long `smoltalk` run.                                                                                                                                    |
+| `trl-lib/ultrafeedback-prompt` | Prompts `generate_pairs.py` samples completions from, for the DPO stage below.                                                                                                                                                      |
 
 Workflow order: `tiny_shakespeare` (local) -> `reformer_enwik8` (A100, ~15 min) ->
-`fineweb_edu` pretraining (A100) -> `smoltalk` SFT.
+`fineweb_edu` pretraining (A100) -> `no_robots`/`smoltalk` SFT -> DPO preference tuning.
 
 ## Repository structure
 
@@ -121,14 +123,21 @@ src/llmtrain/
   data/tokenizer.py      Byte-level BPE training (train_tokenizer) and batch encode/pad (encode_batch)
   model/transformer.py   TransformerLM: RoPE, RMSNorm, SwiGLU, GQA, weight tying, KV-cache-aware forward
   model/cache.py          KVCache: per-layer (k, v) tensor cache, concatenated along the sequence dim
+  model/hf_wrapper.py     TransformerLM wrapped as a transformers.PreTrainedModel, for TRL's DPOTrainer
   training/config.py     DataConfig/ModelConfig/TrainConfig/GenerationConfig dataclasses (single source of CLI defaults)
   training/train.py       select_device, loss functions, get_lr (warmup+cosine), train(), main() -- the training CLI
   training/checkpoint.py  save/load model + optimizer + dataset iterator state + model config, as one unit
-  generate.py             KV-cache-backed text generation CLI (greedy or temperature/top-k/top-p sampling)
+  training/dpo.py         DPO training via TRL's DPOTrainer/DPOConfig -- the third DPO pipeline stage
+  generate.py             KV-cache-backed text generation CLI (greedy or temperature/top-k/top-p sampling, --chat)
+  generate_pairs.py       Samples completion pairs from an SFT checkpoint -- DPO pipeline stage 1
+  judge.py                 LLM-as-judge: turns completion pairs into chosen/rejected preference pairs -- stage 2
   logging_config.py       dictConfig setup: stdout + JSONL file handler
 ```
 
-Full CLI reference for both entry points below (or run either with `--help`).
+Full CLI reference for `train.py`/`generate.py` below (or run any entry point with `--help`).
+The DPO pipeline (`generate_pairs.py` → `judge.py` → `training/dpo.py`) is pod-only, unattended,
+multi-stage — see [`docs/training-guide.md`](docs/training-guide.md) for the actual commands
+rather than a flag reference here.
 
 **`train.py`**:
 
@@ -152,9 +161,15 @@ python -m llmtrain.training.train --dataset {tiny_shakespeare,reformer_enwik8,fi
 **`generate.py`**:
 
 ```text
-python -m llmtrain.generate --checkpoint PATH --prompt "..." [--tokenizer-path PATH]
+python -m llmtrain.generate --checkpoint PATH --prompt "..." [--tokenizer-path PATH] [--chat]
     [--max-new-tokens N] [--temperature F] [--repetition-penalty F] [--top-k N] [--top-p F]
 ```
+
+`--chat` wraps `--prompt` in the `<|user|>\n...\n<|assistant|>\n` shape every SFT/DPO training
+example starts with — **required** for any chat-tuned checkpoint (`smoltalk`/`no_robots` SFT,
+or DPO on top of either); omit it only for base/pretraining-only checkpoints. A raw prompt
+against a chat-tuned checkpoint is out-of-distribution and produces garbled output that looks
+like a model-quality problem but isn't — see `docs/dpo-run-results.md` §4 for a worked example.
 
 Every `train.py` flag's default reads from the corresponding `DataConfig`/`ModelConfig`/
 `TrainConfig` field (`training/config.py`); every `generate.py` sampling flag's default reads
@@ -174,8 +189,7 @@ uv run --env-file .env wandb login --verify  # confirm W&B auth before a real ru
 Everything except the GPU training loop itself has a real, fast, CPU-only unit test with tiny
 fake data (data loading, tokenizer, model forward/backward shapes, checkpoint round-trip,
 config parsing). `train()`/`main()` orchestration has no automated test by design — it's
-validated by the manual smoke test described above and in
-[`docs/training-guide.md`](docs/training-guide.md).
+validated by the manual smoke test described above.
 
 ## Known limitations
 
@@ -193,8 +207,15 @@ validated by the manual smoke test described above and in
 - **Fused cross-entropy (`--use-fused-ce`) is CUDA-only.** The flag itself is accepted
   everywhere, but the fused path is only actually used when `device.type == "cuda"`; on
   MPS/CPU it silently falls back to the standard loss.
+- **`generate.py --chat` is required for chat-tuned checkpoints, and it's easy to forget.**
+  There's no automatic detection of whether a checkpoint was chat-tuned — omitting `--chat`
+  against an SFT/DPO checkpoint silently produces garbled, off-topic output that looks like a
+  model-quality problem rather than a missing flag. See the CLI reference above.
+- **DPO training has no `--resume`.** A crash mid-run loses all training progress (not the
+  judged preference data, which is written independently). Deliberate, not an oversight — real
+  runs so far take ~17 optimizer steps (minutes), so this isn't worth the complexity yet; see
+  `CLAUDE.md`'s DPO pipeline section if that changes.
 
-See `CLAUDE.md` for the full technical reference (device handling, RunPod workflow, logging
-strategy, and more), and [`docs/training-guide.md`](docs/training-guide.md) for a complete
-walkthrough of every stage from local smoke test through the real `fineweb_edu` pretraining
-run.
+See `CLAUDE.md` for the full technical reference (device handling, RunPod workflow, DPO
+pipeline, logging strategy, and more), and [`docs/training-guide.md`](docs/training-guide.md)
+for the pod runbook — setup and the exact commands to run pretraining → SFT → DPO.

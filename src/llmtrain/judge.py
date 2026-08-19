@@ -19,6 +19,7 @@ DEFAULT_JUDGE_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 DEFAULT_JUDGE_TEMPERATURE = 0.15
 _MAX_JUDGE_ATTEMPTS = 3
 _RETRY_DELAY_SECONDS = 5.0
+_DEFAULT_PROGRESS_INTERVAL = 50
 
 JUDGE_JSON_SCHEMA = {
     "name": "judge_verdict",
@@ -205,6 +206,7 @@ def run_judge_pipeline(
     retry_delay: float = _RETRY_DELAY_SECONDS,
     output_path: str | Path | None = None,
     resume_from: int = 0,
+    progress_interval: int = _DEFAULT_PROGRESS_INTERVAL,
 ) -> tuple[list[dict], dict]:
     # resume_from skips rows already processed in a prior (interrupted) run of this same
     # rows list -- callers always pass the full rows list, never a truncated one; the
@@ -256,7 +258,7 @@ def run_judge_pipeline(
             if progress_path is not None:
                 progress_path.write_text(str(i))
 
-            if i % 50 == 0:
+            if i % progress_interval == 0:
                 logger.info(
                     "judge pipeline progress: %d/%d processed, %d kept", i, len(rows), len(kept)
                 )

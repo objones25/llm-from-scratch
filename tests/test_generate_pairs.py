@@ -66,6 +66,34 @@ def test_generate_pairs_writes_rows_incrementally_to_output_path(tmp_path):
     assert written == rows
 
 
+def test_generate_pairs_resume_from_skips_already_generated_questions():
+    torch.manual_seed(0)
+    model, tokenizer = _tiny_setup()
+    config = GenerationConfig(max_new_tokens=5, temperature=0.7)
+
+    rows = generate_pairs(model, tokenizer, ["hello", "bye", "hello"], config, resume_from=1)
+
+    assert len(rows) == 2
+    assert [row["prompt"] for row in rows] == ["bye", "hello"]
+
+
+def test_generate_pairs_resume_from_appends_instead_of_overwriting_output(tmp_path):
+    torch.manual_seed(0)
+    model, tokenizer = _tiny_setup()
+    config = GenerationConfig(max_new_tokens=5, temperature=0.7)
+    output_path = tmp_path / "pairs_raw.jsonl"
+    output_path.write_text(json.dumps({"prompt": "hello", "completion_a": "x", "completion_b": "y"}) + "\n")
+
+    generate_pairs(
+        model, tokenizer, ["hello", "bye"], config, output_path=output_path, resume_from=1
+    )
+
+    written = [json.loads(line) for line in output_path.read_text().splitlines() if line.strip()]
+    assert len(written) == 2
+    assert written[0]["prompt"] == "hello"
+    assert written[1]["prompt"] == "bye"
+
+
 def test_generate_pairs_logs_progress(caplog):
     torch.manual_seed(0)
     model, tokenizer = _tiny_setup()

@@ -38,16 +38,24 @@ def generate_pairs(
     config: GenerationConfig,
     output_path: str | Path | None = None,
     progress_interval: int = _DEFAULT_PROGRESS_INTERVAL,
+    resume_from: int = 0,
 ) -> list[dict]:
     # Writes each row incrementally (mirroring judge.py's run_judge_pipeline) so a
     # crash/kill mid-run leaves a usable partial pairs_raw.jsonl instead of losing every
     # completed generation -- this loop can run for hours unattended on a rented GPU.
+    # resume_from skips questions already generated in a prior (interrupted) run --
+    # unlike judge.py, no separate progress marker is needed: every question here
+    # produces exactly one written row, so "rows already in --output" directly gives the
+    # resume point (main() computes it that way). output_path opens in append mode when
+    # resuming so already-written rows survive instead of being truncated.
     rows: list[dict] = []
     with ExitStack() as stack:
         output_file = (
-            stack.enter_context(open(output_path, "w")) if output_path is not None else None
+            stack.enter_context(open(output_path, "a" if resume_from else "w"))
+            if output_path is not None
+            else None
         )
-        for i, question in enumerate(questions, start=1):
+        for i, question in enumerate(questions[resume_from:], start=resume_from + 1):
             completion_a = sample_completion(model, tokenizer, question, config)
             completion_b = sample_completion(model, tokenizer, question, config)
             row = {
@@ -83,6 +91,16 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=GenerationConfig.top_k)
     parser.add_argument("--top-p", type=float, default=GenerationConfig.top_p)
     parser.add_argument("--log-file", type=str, default=TrainConfig.log_file)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "resume an interrupted run: skip questions already generated (counted from "
+            "existing rows in --output) and append to --output instead of overwriting it. "
+            "Requires the same --num-prompts as the interrupted run, since the resumed "
+            "question list must line up with what's already on disk."
+        ),
+    )
     args = parser.parse_args()
 
     configure_logging(log_file=args.log_file)
@@ -101,6 +119,12 @@ def main() -> None:
     dataset = load_dataset(PROMPT_DATASET, split="train", streaming=True)
     questions = [row["prompt"][0]["content"] for row in dataset.take(args.num_prompts)]
 
+    resume_from = 0
+    output_path = Path(args.output)
+    if args.resume and output_path.exists():
+        resume_from = sum(1 for line in output_path.read_text().splitlines() if line.strip())
+        logger.info("resuming generate_pairs from prompt %d/%d", resume_from, len(questions))
+
     config = GenerationConfig(
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
@@ -108,7 +132,7 @@ def main() -> None:
         top_k=args.top_k,
         top_p=args.top_p,
     )
-    generate_pairs(model, tokenizer, questions, config, output_path=args.output)
+    generate_pairs(model, tokenizer, questions, config, output_path=args.output, resume_from=resume_from)
 
 
 if __name__ == "__main__":

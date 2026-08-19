@@ -386,6 +386,38 @@ def test_load_or_train_tokenizer_falls_back_when_resuming_without_a_saved_tokeni
     assert tokenizer.get_vocab_size() > 0
 
 
+def test_load_or_train_tokenizer_resolves_an_s3_resume_path_like_init_from_checkpoint_does(
+    tmp_path, monkeypatch
+):
+    # Regression test: --resume previously built `Path(resume_path).parent /
+    # "tokenizer.json"` directly, so an s3:// resume_path was treated as a literal local
+    # path -- silently missing (`.exists()` False) and falling back to retraining the
+    # tokenizer, rather than actually resolving it via s3.py like --init-from-checkpoint
+    # already does. Assert the fix routes through sibling_path/resolve_local_path instead.
+    texts = ["hello world", "hello there"]
+    train_dataset = _fake_train_dataset(texts)
+    data_cfg = DataConfig(tokenizer_vocab_size=50, tokenizer_sample_size=2)
+    saved_tokenizer = train_tokenizer(texts, vocab_size=50)
+    saved_tokenizer.save(str(tmp_path / "tokenizer.json"))
+
+    import llmtrain.training.train as train_module
+
+    calls = []
+
+    def fake_resolve_local_path(uri: str) -> "object":
+        calls.append(uri)
+        return tmp_path / "tokenizer.json"
+
+    monkeypatch.setattr(train_module, "resolve_local_path", fake_resolve_local_path)
+
+    loaded = load_or_train_tokenizer(
+        "s3://bucket/prefix/step_10.pt", train_dataset, data_cfg
+    )
+
+    assert calls == ["s3://bucket/prefix/tokenizer.json"]
+    assert loaded.get_vocab() == saved_tokenizer.get_vocab()
+
+
 def test_find_model_config_overrides_returns_empty_when_configs_match():
     model_cfg = ModelConfig(d_model=64, n_layers=4)
     saved = asdict(model_cfg)

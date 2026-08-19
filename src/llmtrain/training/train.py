@@ -110,7 +110,7 @@ def load_or_train_tokenizer(
     resume_path: str | None, train_dataset: IterableDataset, data_cfg: DataConfig
 ) -> Tokenizer:
     if resume_path is not None:
-        tokenizer_path = Path(resume_path).parent / "tokenizer.json"
+        tokenizer_path = resolve_local_path(sibling_path(resume_path, "tokenizer.json"))
         if tokenizer_path.exists():
             logger.info("loaded tokenizer from %s", tokenizer_path)
             return Tokenizer.from_file(str(tokenizer_path))
@@ -280,7 +280,10 @@ def train(
         # Training reconstructs the model from the current model_cfg, not the checkpoint's
         # persisted config — the returned model_config is only used by generate.py, which
         # rebuilds the model from scratch at inference time.
-        step, dataset_state, _resumed_model_config = load_checkpoint(resume_path, model, optimizer)
+        resume_checkpoint_path = resolve_local_path(resume_path)
+        step, dataset_state, _resumed_model_config = load_checkpoint(
+            resume_checkpoint_path, model, optimizer
+        )
         if dataset_state is not None:
             train_dataset.load_state_dict(dataset_state)
         logger.info("resumed from checkpoint at step %d", step, extra={"step": step})
