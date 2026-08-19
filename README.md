@@ -288,3 +288,10 @@ validated by the manual smoke test described above.
 - **DPO training has no `--resume`.** A crash mid-run loses all training progress (not the
   judged preference data, which is written independently). Deliberate, not an oversight — real
   runs so far take ~17 optimizer steps (minutes), so this isn't worth the complexity yet.
+- **DPO preference tuning is minimal by design, not neglect.** Trained on only 1,403 judged
+  pairs (production DPO/RLHF runs use hundreds of thousands to millions); reward accuracy sits
+  at 0.55–0.65 (chance = 0.5) — a real but weak signal. Scaling pair count further is
+  deliberately deprioritized: the base model itself was diagnosed as capacity-limited, not
+  undertrained, and DPO only shapes response style/preference on top of what the base model
+  already knows — it can't add capability the pretrained model doesn't have. More pairs would
+  tighten the signal somewhat, but won't move the model's actual ceiling.

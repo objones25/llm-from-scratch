@@ -19,3 +19,4 @@ app.log*
 wandb/
 .DS_Store
 .worktrees/
+dpo-pairs*
