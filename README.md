@@ -16,8 +16,7 @@ training happens on a rented RunPod A100 GPU.
 ## Example output
 
 From the current best checkpoint (`dpo-checkpoints/step_176.pt`: pretrained on ~9.7B tokens of
-`fineweb-edu`, SFT'd on `smoltalk`, DPO-tuned for 1 epoch on 1,403 judged preference pairs — see
-[`docs/dpo-run-results.md`](docs/dpo-run-results.md) for the full run):
+`fineweb-edu`, SFT'd on `smoltalk`, DPO-tuned for 1 epoch on 1,403 judged preference pairs):
 
 ```bash
 $ uv run python -m llmtrain.generate --checkpoint dpo-checkpoints/step_176.pt \
@@ -244,7 +243,7 @@ python -m llmtrain.generate --checkpoint PATH --prompt "..." [--tokenizer-path P
 example starts with — **required** for any chat-tuned checkpoint (`smoltalk`/`no_robots` SFT,
 or DPO on top of either); omit it only for base/pretraining-only checkpoints. A raw prompt
 against a chat-tuned checkpoint is out-of-distribution and produces garbled output that looks
-like a model-quality problem but isn't — see `docs/dpo-run-results.md` §4 for a worked example.
+like a model-quality problem but isn't.
 
 Every `train.py` flag's default reads from the corresponding `DataConfig`/`ModelConfig`/
 `TrainConfig` field (`training/config.py`); every `generate.py` sampling flag's default reads
