@@ -13,6 +13,7 @@ my_checkpoints/
 my_checkpoints_v2/
 my_sft_checkpoints/
 my_sft_checkpoints_v2/
+dpo-checkpoints/
 plots/
 app.log*
 wandb/
