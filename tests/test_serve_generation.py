@@ -1,6 +1,11 @@
 import pytest
 
-from llmtrain.serve.generation import validate_messages
+from llmtrain.serve.generation import (
+    MAX_NEW_TOKENS_CEILING,
+    parse_generation_config,
+    validate_messages,
+)
+from llmtrain.training.config import GenerationConfig
 
 
 def test_validate_messages_accepts_well_formed_alternating_history():
@@ -60,3 +65,23 @@ def test_validate_messages_rejects_history_ending_on_assistant_turn():
                 {"role": "assistant", "content": "hello"},
             ]
         )
+
+
+def test_parse_generation_config_uses_defaults_when_payload_omits_fields():
+    cfg = parse_generation_config({})
+    assert cfg.max_new_tokens == GenerationConfig.max_new_tokens
+    assert cfg.temperature == GenerationConfig.temperature
+    assert cfg.repetition_penalty == GenerationConfig.repetition_penalty
+    assert cfg.top_k == GenerationConfig.top_k
+    assert cfg.top_p == GenerationConfig.top_p
+
+
+def test_parse_generation_config_honors_requested_values_under_ceiling():
+    cfg = parse_generation_config({"max_new_tokens": 100, "temperature": 0.5})
+    assert cfg.max_new_tokens == 100
+    assert cfg.temperature == 0.5
+
+
+def test_parse_generation_config_clamps_max_new_tokens_to_ceiling():
+    cfg = parse_generation_config({"max_new_tokens": 10_000})
+    assert cfg.max_new_tokens == MAX_NEW_TOKENS_CEILING
