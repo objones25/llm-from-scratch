@@ -159,9 +159,6 @@ Mac before you spend money on a GPU rental. **This is an infrastructure check, n
 demonstration of model quality** — see [Example output](#example-output) above for that; at 30
 steps on 472 rows the output here is expected to be incoherent.
 
-For the RunPod pod runbook (setup, and the exact commands to run pretraining → SFT → DPO), see
-[`docs/training-guide.md`](docs/training-guide.md).
-
 Train for 30 steps:
 
 ```bash
@@ -213,8 +210,7 @@ src/llmtrain/
 
 Full CLI reference for `train.py`/`generate.py` below (or run any entry point with `--help`).
 The DPO pipeline (`generate_pairs.py` → `judge.py` → `training/dpo.py`) is pod-only, unattended,
-multi-stage — see [`docs/training-guide.md`](docs/training-guide.md) for the actual commands
-rather than a flag reference here.
+multi-stage, and not covered by a flag reference here.
 
 **`train.py`**:
 
@@ -232,8 +228,10 @@ python -m llmtrain.training.train --dataset {tiny_shakespeare,reformer_enwik8,fi
 
 `smoltalk`/`no_robots` are chat datasets (SFT) and require either `--init-from-checkpoint`
 (starting an SFT run from a pretrained checkpoint) or `--resume`; `--tokenizer-path` requires
-`--init-from-checkpoint`. See `CLAUDE.md`'s architecture section for the `--resume` /
-`--init-from-checkpoint` architecture-mismatch footgun.
+`--init-from-checkpoint`. Note: unlike `--init-from-checkpoint`, `--resume` rebuilds the model
+from CLI/default architecture flags rather than the checkpoint's own saved config — resuming a
+run that was started with non-default `--d-model`/`--n-layers`/etc. requires passing the same
+flags again, or `load_state_dict` raises a shape-mismatch error.
 
 **`generate.py`**:
 
@@ -290,9 +288,4 @@ validated by the manual smoke test described above.
   model-quality problem rather than a missing flag. See the CLI reference above.
 - **DPO training has no `--resume`.** A crash mid-run loses all training progress (not the
   judged preference data, which is written independently). Deliberate, not an oversight — real
-  runs so far take ~17 optimizer steps (minutes), so this isn't worth the complexity yet; see
-  `CLAUDE.md`'s DPO pipeline section if that changes.
-
-See `CLAUDE.md` for the full technical reference (device handling, RunPod workflow, DPO
-pipeline, logging strategy, and more), and [`docs/training-guide.md`](docs/training-guide.md)
-for the pod runbook — setup and the exact commands to run pretraining → SFT → DPO.
+  runs so far take ~17 optimizer steps (minutes), so this isn't worth the complexity yet.
