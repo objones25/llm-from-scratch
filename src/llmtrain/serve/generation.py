@@ -1,6 +1,9 @@
 from tokenizers import Tokenizer
 
 from llmtrain.data.chat import format_chat_history
+from llmtrain.model.transformer import TransformerLM
+from llmtrain.s3 import resolve_local_path, sibling_path
+from llmtrain.training.checkpoint import load_checkpoint, load_model_config_from_checkpoint
 from llmtrain.training.config import GenerationConfig
 
 _VALID_ROLES = ("user", "assistant")
@@ -61,3 +64,18 @@ def truncate_to_context_window(
         if len(messages) <= 1:
             raise ValueError("prompt exceeds max_seq_len even after truncating all prior turns")
         messages = messages[2:]  # drop the oldest user/assistant turn-pair, never mid-turn
+
+
+def load_model_and_tokenizer(
+    checkpoint_path: str, tokenizer_path: str | None = None
+) -> tuple[TransformerLM, Tokenizer]:
+    tokenizer_uri = tokenizer_path or sibling_path(checkpoint_path, "tokenizer.json")
+    resolved_checkpoint = resolve_local_path(checkpoint_path)
+    resolved_tokenizer = resolve_local_path(tokenizer_uri)
+
+    tokenizer = Tokenizer.from_file(str(resolved_tokenizer))
+    model_cfg = load_model_config_from_checkpoint(resolved_checkpoint, tokenizer.get_vocab_size())
+    model = TransformerLM(model_cfg)
+    load_checkpoint(resolved_checkpoint, model)
+    model.eval()
+    return model, tokenizer

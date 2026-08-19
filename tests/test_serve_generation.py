@@ -1,14 +1,18 @@
 import pytest
+import torch
 
 from llmtrain.data.chat import format_chat_history
 from llmtrain.data.tokenizer import train_tokenizer
+from llmtrain.model.transformer import TransformerLM
 from llmtrain.serve.generation import (
     MAX_NEW_TOKENS_CEILING,
+    load_model_and_tokenizer,
     parse_generation_config,
     truncate_to_context_window,
     validate_messages,
 )
-from llmtrain.training.config import GenerationConfig
+from llmtrain.training.checkpoint import save_checkpoint
+from llmtrain.training.config import GenerationConfig, ModelConfig
 
 
 def test_validate_messages_accepts_well_formed_alternating_history():
@@ -139,3 +143,44 @@ def test_truncate_never_drops_a_turn_mid_pair():
     assert result[0]["role"] == "user"
     assert result[-1] == messages[-1]
     assert len(result) % 2 == 1
+
+
+def test_load_model_and_tokenizer_round_trips_a_saved_checkpoint(tmp_path):
+    tokenizer = train_tokenizer(["hello world", "hello there"], vocab_size=32)
+    config = ModelConfig(
+        vocab_size=tokenizer.get_vocab_size(), d_model=8, n_layers=2, n_heads=4, n_kv_heads=2
+    )
+    model = TransformerLM(config)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+    checkpoint_path = tmp_path / "step_1.pt"
+    tokenizer_path = tmp_path / "tokenizer.json"
+    save_checkpoint(checkpoint_path, model, optimizer, step=1)
+    tokenizer.save(str(tokenizer_path))
+
+    loaded_model, loaded_tokenizer = load_model_and_tokenizer(str(checkpoint_path))
+
+    assert isinstance(loaded_model, TransformerLM)
+    assert loaded_model.training is False
+    assert loaded_tokenizer.get_vocab_size() == tokenizer.get_vocab_size()
+
+
+def test_load_model_and_tokenizer_honors_explicit_tokenizer_path(tmp_path):
+    tokenizer = train_tokenizer(["hello world"], vocab_size=32)
+    config = ModelConfig(
+        vocab_size=tokenizer.get_vocab_size(), d_model=8, n_layers=2, n_heads=4, n_kv_heads=2
+    )
+    model = TransformerLM(config)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+    checkpoint_path = tmp_path / "step_1.pt"
+    other_dir = tmp_path / "elsewhere"
+    other_dir.mkdir()
+    tokenizer_path = other_dir / "tok.json"
+    save_checkpoint(checkpoint_path, model, optimizer, step=1)
+    tokenizer.save(str(tokenizer_path))
+
+    _loaded_model, loaded_tokenizer = load_model_and_tokenizer(
+        str(checkpoint_path), str(tokenizer_path)
+    )
+    assert loaded_tokenizer.get_vocab_size() == tokenizer.get_vocab_size()
