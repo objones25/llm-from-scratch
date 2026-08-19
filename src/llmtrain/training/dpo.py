@@ -13,7 +13,7 @@ from trl import (
     DPOTrainer,  # type: ignore
 )
 
-from llmtrain.data.chat import format_turn
+from llmtrain.data.chat import format_prompt
 from llmtrain.logging_config import configure_logging
 from llmtrain.model.hf_wrapper import (
     TransformerLMConfig,
@@ -35,7 +35,7 @@ def load_dpo_dataset(path: str | Path) -> Dataset:
     rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
     formatted = [
         {
-            "prompt": format_turn("user", row["prompt"]) + "<|assistant|>\n",
+            "prompt": format_prompt(row["prompt"]),
             "chosen": row["chosen"],
             "rejected": row["rejected"],
         }

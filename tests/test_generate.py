@@ -7,6 +7,7 @@ from llmtrain.generate import (
     _apply_repetition_penalty,
     _apply_top_k,
     _apply_top_p,
+    _build_prompt,
     _sample,
     generate,
     generate_token_ids,
@@ -28,6 +29,18 @@ def _tiny_setup() -> tuple[TransformerLM, Tokenizer]:
     )
     model = TransformerLM(config)
     return model, tokenizer
+
+
+def test_build_prompt_leaves_prompt_unchanged_when_chat_is_false():
+    assert _build_prompt("What's the capital of France?", chat=False) == (
+        "What's the capital of France?"
+    )
+
+
+def test_build_prompt_wraps_in_chat_turns_when_chat_is_true():
+    assert _build_prompt("What's the capital of France?", chat=True) == (
+        "<|user|>\nWhat's the capital of France?\n<|assistant|>\n"
+    )
 
 
 def test_generate_token_ids_produces_requested_number_of_new_tokens():

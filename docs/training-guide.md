@@ -459,9 +459,15 @@ re-download it):
 ```bash
 uv run --env-file .env python -m llmtrain.generate \
   --checkpoint s3://304ulu3f96/sft-checkpoints-smoltalk/step_<N>.pt \
-  --prompt "What is the capital of France?" \
+  --chat --prompt "What is the capital of France?" \
   --max-new-tokens 200 --temperature 0.7 --repetition-penalty 1.2
 ```
+
+`--chat` is required here (and for any SFT/DPO checkpoint) — it wraps `--prompt` in the
+`<|user|>\n...\n<|assistant|>\n` shape every chat-formatted training example starts with.
+Omitting it feeds the model a prompt it never saw at position 0 during training and
+produces garbled, off-topic output that looks like a model-quality problem but isn't — see
+`docs/dpo-run-results.md` §4 for a worked example of exactly this failure mode.
 
 (swap `sft-checkpoints-smoltalk` for `sft-checkpoints` to evaluate the `no_robots` sanity run
 instead, and `step_<N>` for whichever step you stopped at.)
@@ -482,9 +488,18 @@ for obj in s3.list_objects_v2(Bucket='304ulu3f96').get('Contents', []):
 
 ```text
 python -m llmtrain.generate --checkpoint <path/to/step_N.pt> [--tokenizer-path PATH] \
-    --prompt "..." [--max-new-tokens N] [--temperature F] [--repetition-penalty F] \
+    --prompt "..." [--chat] [--max-new-tokens N] [--temperature F] [--repetition-penalty F] \
     [--top-k N] [--top-p F]
 ```
+
+`--chat` wraps `--prompt` via `data.chat.format_prompt()` (the same helper
+`generate_pairs.py`/`training/dpo.py` use to build training prompts) into
+`<|user|>\n{prompt}\n<|assistant|>\n` before generating. Pass it for any checkpoint trained
+on chat-formatted data (SFT `smoltalk`/`no_robots`, or DPO on top of either) — every
+training example starts with `<|user|>\n`, so a raw prompt is out-of-distribution at
+position 0 and produces incoherent output unrelated to the model's actual quality. Omit it
+for base/pretraining-only checkpoints (`tiny_shakespeare`, `reformer_enwik8`,
+`fineweb_edu`), which never saw these tags and expect a raw prompt.
 
 `--tokenizer-path` defaults to `tokenizer.json` next to the checkpoint (saved there by
 `train.py`). Model architecture is reconstructed from the `model_config` persisted in the
@@ -673,6 +688,6 @@ current defaults rather than trusting this list to stay in sync):
 `generate.py`:
 
 ```text
---checkpoint (required), --tokenizer-path, --prompt (required)
+--checkpoint (required), --tokenizer-path, --prompt (required), --chat
 --max-new-tokens, --temperature, --repetition-penalty, --top-k, --top-p
 ```

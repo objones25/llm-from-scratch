@@ -99,10 +99,12 @@ A second CLI entry point, `generate.py`, runs inference from a trained checkpoin
 
 ```
 python -m llmtrain.generate --checkpoint <path/to/step_N.pt> [--tokenizer-path PATH] \
-    --prompt "..." [--max-new-tokens N] [--temperature F] [--repetition-penalty F] [--top-k N] [--top-p F]
+    --prompt "..." [--chat] [--max-new-tokens N] [--temperature F] [--repetition-penalty F] [--top-k N] [--top-p F]
 ```
 
 `--tokenizer-path` defaults to `tokenizer.json` next to the checkpoint (saved alongside checkpoints by `train.py`). Sampling defaults live in `GenerationConfig` (`training/config.py`), shared as the single source of truth between the CLI flag defaults and the `generate()`/`generate_token_ids()` signatures (both take a `GenerationConfig` instead of five separate parameters). Model architecture is reconstructed from the `model_config` persisted in the checkpoint (falls back to `ModelConfig()` defaults for older checkpoints saved before that field existed).
+
+`--chat` wraps `--prompt` via `data/chat.py`'s `format_prompt()` (`format_turn("user", prompt) + "<|assistant|>\n"`) before generating — required for checkpoints trained on chat-formatted data (SFT `smoltalk`/`no_robots`, or DPO on top of either), since every training example (`encode_chat_example`) starts with `<|user|>\n` and a raw, unwrapped prompt is out-of-distribution at position 0. Omit it for base/pretraining-only checkpoints, which never saw these tags. `format_prompt` is the single shared definition `generate.py`, `generate_pairs.py`, and `training/dpo.py` all call — previously duplicated inline in each. Confirmed by direct A/B testing against a real DPO checkpoint: an unwrapped prompt produced rambling/off-topic/degenerate output that looked like a model-quality or stop-token problem; the same prompt wrapped via `--chat` produced coherent, correctly-stopped output — see `docs/dpo-run-results.md` §4.
 
 ## Device handling (MPS vs CUDA)
 

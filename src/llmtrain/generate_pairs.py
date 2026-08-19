@@ -7,7 +7,7 @@ from pathlib import Path
 from datasets import load_dataset
 from tokenizers import Tokenizer
 
-from llmtrain.data.chat import format_turn
+from llmtrain.data.chat import format_prompt
 from llmtrain.generate import generate_token_ids
 from llmtrain.logging_config import configure_logging
 from llmtrain.model.transformer import TransformerLM
@@ -20,10 +20,6 @@ logger = logging.getLogger(__name__)
 
 PROMPT_DATASET = "trl-lib/ultrafeedback-prompt"
 _DEFAULT_PROGRESS_INTERVAL = 10
-
-
-def format_prompt(question: str) -> str:
-    return format_turn("user", question) + "<|assistant|>\n"
 
 
 def sample_completion(

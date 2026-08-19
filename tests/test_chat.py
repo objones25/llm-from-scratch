@@ -1,6 +1,12 @@
 import torch
 
-from llmtrain.data.chat import IGNORE_INDEX, encode_chat_batch, encode_chat_example, format_turn
+from llmtrain.data.chat import (
+    IGNORE_INDEX,
+    encode_chat_batch,
+    encode_chat_example,
+    format_prompt,
+    format_turn,
+)
 from llmtrain.data.tokenizer import PAD_TOKEN, train_tokenizer
 
 
@@ -15,6 +21,10 @@ def _tiny_tokenizer():
 
 def test_format_turn_wraps_content_in_role_tags():
     assert format_turn("user", "hi") == "<|user|>\nhi\n"
+
+
+def test_format_prompt_wraps_content_in_user_turn_and_opens_assistant_turn():
+    assert format_prompt("hi") == "<|user|>\nhi\n<|assistant|>\n"
 
 
 def test_encode_chat_example_masks_non_assistant_turns_and_supervises_assistant_turns():

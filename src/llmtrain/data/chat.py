@@ -8,6 +8,13 @@ def format_turn(role: str, content: str) -> str:
     return f"<|{role}|>\n{content}\n"
 
 
+def format_prompt(content: str) -> str:
+    # Wraps a raw string in a user turn and opens the assistant turn, matching the
+    # exact prefix every SFT/DPO training example starts with (see encode_chat_example
+    # below) -- the shape a chat/instruction-tuned checkpoint expects at inference time.
+    return format_turn("user", content) + "<|assistant|>\n"
+
+
 def encode_chat_example(
     tokenizer: Tokenizer, messages: list[dict], pad_id: int, max_seq_len: int
 ) -> tuple[list[int], list[int]]:

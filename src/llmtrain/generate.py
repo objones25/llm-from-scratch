@@ -3,6 +3,7 @@ import argparse
 import torch
 from tokenizers import Tokenizer
 
+from llmtrain.data.chat import format_prompt
 from llmtrain.data.tokenizer import PAD_TOKEN
 from llmtrain.model.cache import KVCache
 from llmtrain.model.transformer import TransformerLM
@@ -69,6 +70,10 @@ def _sample(
     logits = _apply_top_p(logits, top_p)
     probs = torch.softmax(logits, dim=-1)
     return int(torch.multinomial(probs, num_samples=1).item())
+
+
+def _build_prompt(prompt: str, chat: bool) -> str:
+    return format_prompt(prompt) if chat else prompt
 
 
 def generate_token_ids(
@@ -148,6 +153,16 @@ def main() -> None:
         help="local path or s3://bucket/key; defaults to tokenizer.json next to --checkpoint",
     )
     parser.add_argument("--prompt", type=str, required=True)
+    parser.add_argument(
+        "--chat",
+        action="store_true",
+        help=(
+            "wrap --prompt as a user turn (<|user|>...\\n<|assistant|>\\n) before generating -- "
+            "required for checkpoints trained on chat-formatted data (SFT/DPO), since every "
+            "training example starts with <|user|>\\n and a raw prompt is out-of-distribution "
+            "at position 0. Omit for base/pretraining-only checkpoints."
+        ),
+    )
     parser.add_argument("--max-new-tokens", type=int, default=GenerationConfig.max_new_tokens)
     parser.add_argument("--temperature", type=float, default=GenerationConfig.temperature)
     parser.add_argument(
@@ -173,7 +188,8 @@ def main() -> None:
         top_k=args.top_k,
         top_p=args.top_p,
     )
-    output = generate(model, tokenizer, args.prompt, generation_cfg)
+    prompt = _build_prompt(args.prompt, args.chat)
+    output = generate(model, tokenizer, prompt, generation_cfg)
     print(output)
 
 
