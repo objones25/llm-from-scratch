@@ -4,6 +4,7 @@ from llmtrain.data.chat import (
     IGNORE_INDEX,
     encode_chat_batch,
     encode_chat_example,
+    format_chat_history,
     format_prompt,
     format_turn,
 )
@@ -161,3 +162,18 @@ def test_encode_chat_batch_stacks_examples_into_tensors():
     assert labels.shape == (2, 16)
     assert input_ids.dtype == torch.long
     assert labels.dtype == torch.long
+
+
+def test_format_chat_history_wraps_each_turn_and_opens_assistant_turn():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "how are you"},
+    ]
+    assert format_chat_history(messages) == (
+        "<|user|>\nhi\n<|assistant|>\nhello\n<|user|>\nhow are you\n<|assistant|>\n"
+    )
+
+
+def test_format_chat_history_single_user_turn_matches_format_prompt():
+    assert format_chat_history([{"role": "user", "content": "hi"}]) == format_prompt("hi")

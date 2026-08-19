@@ -15,6 +15,13 @@ def format_prompt(content: str) -> str:
     return format_turn("user", content) + "<|assistant|>\n"
 
 
+def format_chat_history(messages: list[dict]) -> str:
+    # Multi-turn analogue of format_prompt: wraps every turn in its role tags, then
+    # opens the trailing assistant turn the model should continue from.
+    formatted = "".join(format_turn(m["role"], m["content"]) for m in messages)
+    return formatted + "<|assistant|>\n"
+
+
 def encode_chat_example(
     tokenizer: Tokenizer, messages: list[dict], pad_id: int, max_seq_len: int
 ) -> tuple[list[int], list[int]]:
