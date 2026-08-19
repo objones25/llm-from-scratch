@@ -68,29 +68,23 @@ meant to actually be used afterward.
 Each scale-up was triggered by the same empirical signal in the previous run's `val_loss`
 curve, not a fixed schedule: a "flat tail," where the last few hundred steps barely move
 `val_loss` at all. v0 dropped only 0.0050 in its final 500 steps; v1 — 3x bigger and much
-closer to Chinchilla-optimal (25 vs. 69 tokens/param) — dropped an almost identical 0.0052
-(`plots/chinchilla-comparison.png`). That reproduction is the signature of a model that's
-run out of capacity to extract more signal from more data, not one that just needs more
-steps — full diagnosis, including weight/activation health checks that ruled out a
-training bug as an alternative explanation (no dead neurons, no collapsed layers), in
-[`docs/pretrain-sft-scale-analysis.md`](docs/pretrain-sft-scale-analysis.md).
+closer to Chinchilla-optimal (25 vs. 69 tokens/param) — dropped an almost identical 0.0052.
+That reproduction is the signature of a model that's run out of capacity to extract more
+signal from more data, not one that just needs more steps; weight/activation health checks
+(no dead neurons, no collapsed layers) ruled out a training bug as the alternative
+explanation.
 
-The v1→v2 scale-up also settled a width-vs-depth question: that same analysis found block
-0 does most of the work converting token embeddings into features (~0.15 cosine
-similarity between its input and output) while blocks 1–19 barely nudge the residual
-stream (0.89–0.97 cosine similarity) — a sign that blindly adding more layers risks
-near-identity pass-throughs rather than real capacity. v2 grows only width (`d_model`
-1024→1440, `n_heads` 16→20) and holds depth at 20 layers rather than gambling on that.
+The v1→v2 scale-up also settled a width-vs-depth question: a per-block residual-stream
+analysis found block 0 does most of the work converting token embeddings into features
+(~0.15 cosine similarity between its input and output) while blocks 1–19 barely nudge the
+residual stream (0.89–0.97 cosine similarity) — a sign that blindly adding more layers
+risks near-identity pass-throughs rather than real capacity. v2 grows only width
+(`d_model` 1024→1440, `n_heads` 16→20) and holds depth at 20 layers rather than gambling
+on that.
 
 v2 is the architecture behind every SFT/DPO checkpoint in this repo (see
 [Example output](#example-output) above) — sized to a ~$160 RunPod budget, not to a target
-quality bar. Full sizing math and the architecture-grid search (head-dimension
-divisibility/hardware-friendliness constraints) are in
-[`docs/superpowers/specs/2026-08-09-model-scale-up-design.md`](docs/superpowers/specs/2026-08-09-model-scale-up-design.md)
-(v0→v1) and
-[`docs/superpowers/specs/2026-08-13-model-scale-up-v2-design.md`](docs/superpowers/specs/2026-08-13-model-scale-up-v2-design.md)
-(v1→v2); loss/LR/grad-norm curves for all three runs are `plots/pretraining.png`,
-`plots/pretraining-scaleup.png`, and `plots/pretraining-scaleup-v2.png`.
+quality bar.
 
 ## Architecture highlights
 
