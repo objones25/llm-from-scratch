@@ -136,6 +136,11 @@ manage context, and keeps the website's proxy free of special-case error handlin
 
 ## Deployment configuration
 
+- **Network volume**: `dpo-checkpoints/step_176.pt` + `tokenizer.json` live on a dedicated 10GB
+  network volume (`US-MD-1`, `STANDARD` tier — that data center is one of RunPod's S3-API-enabled
+  ones, confirmed working; not every data center supports it, and not every data center that
+  supports network volumes at all supports `HIGH_PERFORMANCE`). The serverless endpoint must be
+  deployed in the same data center as this volume for the mount to work.
 - **GPU tier**: cheapest RunPod serverless tier with enough VRAM. Model weights are
   ~478.6M params x 2 bytes (fp16) ~= 0.95GB, plus per-request KV cache (tens of MB even near the
   2048-token ceiling) and framework overhead — comfortably fits RunPod's smallest GPU tier
