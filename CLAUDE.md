@@ -173,6 +173,31 @@ stateless, why no cross-request KV-cache, deployment config) and
 stateless by design: the client resends the full message history every call, and
 `model/cache.py`'s `KVCache` stays request-scoped, never persisted across requests.
 
+`serve/handler.py` reads `CHECKPOINT_PATH` (default `/runpod-volume/dpo-checkpoints/step_176.pt`,
+the mounted network-volume path RunPod's serverless workers see) and `TOKENIZER_PATH` (default
+`None`, which falls back to `tokenizer.json` next to the checkpoint via `s3.py`'s `sibling_path()`
+— same convention `generate.py` uses) at import time, so overriding either just means setting the
+env var before the container starts. `uv sync --extra serve` installs the `runpod` SDK (the
+`serve` group in `pyproject.toml`'s `[project.optional-dependencies]`, alongside `cuda` and `s3`);
+`generation.py` itself never imports `runpod` at all, and `handler.py` only imports it lazily
+inside `if __name__ == "__main__":`, so importing either module in tests never requires the
+package installed. The root `Dockerfile` builds the deployed container image and MUST be built
+with `docker buildx build --platform linux/amd64 ...` — RunPod's GPU workers are all x86_64, and
+`docker build` on Apple Silicon silently defaults to `linux/arm64` otherwise (this bit the actual
+deployment once already, see the design spec's Deployment configuration section).
+
+Request/response shape: job input is
+`{"messages": [{"role": "user"|"assistant", "content": "..."}, ...], "max_new_tokens": N,
+"temperature": F, "top_k": N, "top_p": F, "repetition_penalty": F}` (only `messages` is required,
+everything else defaults from `GenerationConfig`); the response streams
+`{"token": "...", "done": false}` chunks, one per emitted delta, ending in a final `{"done": true}`
+(or, on rejected input, `{"error": "...", "done": true}` with no preceding token chunks).
+`generation.MAX_NEW_TOKENS_CEILING` (512) is the hard server-side cap on `max_new_tokens` —
+`parse_generation_config()` clamps to it regardless of what the client requests, since this is a
+public endpoint and generation time is direct cost exposure; `temperature`/`top_p`/`top_k`/
+`repetition_penalty` are clamped too (see `parse_generation_config()`'s own comments for the exact
+ranges and why each fallback was chosen).
+
 ## Device handling (MPS vs CUDA)
 
 Verified against current PyTorch docs — don't assume from general knowledge, backend support here changes between versions:
