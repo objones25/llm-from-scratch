@@ -137,10 +137,19 @@ manage context, and keeps the website's proxy free of special-case error handlin
 ## Deployment configuration
 
 - **Network volume**: `dpo-checkpoints/step_176.pt` + `tokenizer.json` live on a dedicated 10GB
-  network volume (`US-MD-1`, `STANDARD` tier — that data center is one of RunPod's S3-API-enabled
-  ones, confirmed working; not every data center supports it, and not every data center that
-  supports network volumes at all supports `HIGH_PERFORMANCE`). The serverless endpoint must be
-  deployed in the same data center as this volume for the mount to work.
+  network volume (`US-IL-1`, `STANDARD` tier). The serverless endpoint must be deployed in the same
+  data center as this volume for the mount to work — and, confirmed the hard way during
+  deployment, a data center supporting network volumes / the S3-compatible API is **not** the same
+  as one having any GPU serverless compute at all: the volume originally landed in `US-MD-1`
+  (S3-API-enabled, real checkpoint uploads worked fine there) only to discover `US-MD-1` has zero
+  GPU serverless capacity for every GPU type — `get-gpu-type`'s per-data-center availability list
+  never included it. The volume (and its contents) had to be migrated to `US-IL-1`, which has both
+  S3-API access and real GPU stock. Check a candidate data center against both requirements before
+  provisioning a volume there, not just the S3-API-enabled list.
+- **Image platform**: the container image must be built for `linux/amd64` explicitly
+  (`docker build`/`buildx build --platform linux/amd64`) — RunPod's GPU workers are all x86_64, but
+  `docker build` defaults to the host machine's architecture, so building on Apple Silicon without
+  the flag silently produces a `linux/arm64` image that would fail to run on any RunPod worker.
 - **GPU tier**: cheapest RunPod serverless tier with enough VRAM. Model weights are
   ~478.6M params x 2 bytes (fp16) ~= 0.95GB, plus per-request KV cache (tens of MB even near the
   2048-token ceiling) and framework overhead — comfortably fits RunPod's smallest GPU tier
