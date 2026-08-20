@@ -10,6 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-19-inference-serving-design.md`
 
+> **Post-execution correction:** every `US-MD-1` reference below (network volume location,
+> `dataCenterIds`) is **wrong** — deployment discovered `US-MD-1` has zero GPU serverless capacity
+> for any GPU type despite supporting the S3 API. The real network volume and endpoint are in
+> `US-IL-1`. This plan is left as originally written (a historical record of what was executed and
+> why); the spec has the corrected, current values — read it, not this note's surrounding text, for
+> anything DC/volume-ID-specific.
+
 ## Global Constraints
 
 - API is stateless: the client sends the full message history on every call; no server-side session storage.

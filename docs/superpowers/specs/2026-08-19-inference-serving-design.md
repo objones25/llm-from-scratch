@@ -132,7 +132,13 @@ these as SSE to the browser.
 tokenized; if `len(formatted_history) + max_new_tokens` exceeds the model's trained context
 (`max_seq_len=2048`), the oldest user/assistant turn-pairs are truncated from the front (never
 mid-turn) until it fits, rather than rejecting the request. Matches how most chat UIs silently
-manage context, and keeps the website's proxy free of special-case error handling for it.
+manage context, and keeps the website's proxy free of special-case error handling for it. This
+policy is about *conversation history*, not about a single oversized message: if even the final
+(newest) user turn alone still doesn't fit — a user pasting an enormous amount of text in one
+message — there is no history left to truncate, and that case *does* surface as a structured
+`{"error": ..., "done": true}` chunk via the existing bad-input error path, rather than silently
+truncating the user's own message content (which would drop part of what they wrote without
+telling them). A rare edge case, not a violation of the policy above.
 
 ## Deployment configuration
 
