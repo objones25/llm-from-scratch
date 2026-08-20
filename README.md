@@ -94,7 +94,7 @@ quality bar.
 - **RMSNorm** pre-normalization (`nn.RMSNorm`) around attention and MLP sublayers.
 - **SwiGLU** MLP (`silu(w_gate(x)) * w_up(x)` fed through `w_down`), the LLaMA-style gated
   feed-forward, with the hidden dimension set to `2/3 * 4 * d_model`.
-- **Grouped-query attention (GQA)**: separate `n_heads`/`n_kv_heads` (16/4 by default, a 4:1
+- **Grouped-query attention (GQA)**: separate `n_heads`/`n_kv_heads` (20/4 by default, a 5:1
   ratio) via `F.scaled_dot_product_attention(..., enable_gqa=True)`.
 - **Weight-tied embeddings/head** — the output projection shares its weight tensor with the
   input token embedding (`self.head.weight = self.token_emb.weight`).
