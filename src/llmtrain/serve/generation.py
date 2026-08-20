@@ -60,6 +60,13 @@ def validate_messages(messages: list[dict] | None) -> None:
 
 
 MAX_NEW_TOKENS_CEILING = 512
+_MIN_POSITIVE_TEMPERATURE = 0.01
+
+
+def _clamp_temperature(temperature: float) -> float:
+    if temperature <= 0.0:
+        return 0.0
+    return max(_MIN_POSITIVE_TEMPERATURE, min(temperature, 2.0))
 
 
 def parse_generation_config(payload: dict) -> GenerationConfig:
@@ -72,9 +79,12 @@ def parse_generation_config(payload: dict) -> GenerationConfig:
     )
     return GenerationConfig(
         max_new_tokens=min(requested_max_new_tokens, MAX_NEW_TOKENS_CEILING),
-        # 0.0 is greedy decoding, an existing meaningful value in _sample() -- clamp the
-        # top end only, don't push 0.0 up to some minimum.
-        temperature=max(0.0, min(temperature, 2.0)),
+        # 0.0 is greedy decoding, an existing meaningful value in _sample() -- preserved
+        # exactly. Anything strictly between 0.0 and 0.01 is floored to 0.01: left
+        # unclamped, a near-zero temperature makes _sample()'s `logits / temperature`
+        # overflow to inf, producing nan probabilities and an uncaught RuntimeError from
+        # torch.multinomial -- a crash a client can trigger with e.g. temperature=1e-45.
+        temperature=_clamp_temperature(temperature),
         # <= 0.0 has no sane "smallest valid value" to clamp to, so it falls back to 1.0
         # (top_p disabled/no-op) rather than some tiny positive epsilon.
         top_p=1.0 if top_p <= 0.0 else min(top_p, 1.0),

@@ -5,7 +5,7 @@ import torch
 
 from llmtrain.data.chat import format_chat_history
 from llmtrain.data.tokenizer import PAD_TOKEN, train_tokenizer
-from llmtrain.generate import generate_token_ids
+from llmtrain.generate import _sample, generate_token_ids
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.serve.generation import (
     MAX_MESSAGE_CONTENT_CHARS,
@@ -143,6 +143,29 @@ def test_parse_generation_config_clamps_temperature_to_valid_range():
     assert parse_generation_config({"temperature": 5.0}).temperature == 2.0
     # 0.0 (greedy) is an existing meaningful value, not something to push upward.
     assert parse_generation_config({"temperature": 0.0}).temperature == 0.0
+
+
+def test_parse_generation_config_floors_near_zero_positive_temperature():
+    # A tiny-but-nonzero temperature (e.g. 1e-45) previously survived the [0.0, 2.0]
+    # clamp unchanged, then overflowed `logits / temperature` to inf in _sample(),
+    # producing nan probabilities and an uncaught RuntimeError from torch.multinomial.
+    # Anything strictly between 0.0 and the floor gets raised to the floor; 0.0 itself
+    # (the greedy sentinel) stays untouched.
+    assert parse_generation_config({"temperature": 1e-45}).temperature == 0.01
+    assert parse_generation_config({"temperature": 1e-10}).temperature == 0.01
+    assert parse_generation_config({"temperature": 0.005}).temperature == 0.01
+    assert parse_generation_config({"temperature": 0.0}).temperature == 0.0
+    assert parse_generation_config({"temperature": 0.02}).temperature == 0.02
+
+
+def test_near_zero_temperature_does_not_crash_sampling():
+    # Regression test tied directly to the reported crash: a near-zero temperature
+    # must not reach _sample() unclamped, or torch.multinomial raises RuntimeError
+    # ("probability tensor contains either `inf`, `nan` or element < 0").
+    cfg = parse_generation_config({"temperature": 1e-45})
+    logits = torch.tensor([[5.0, 1.0, 0.5]])
+    # Must not raise.
+    _sample(logits, [], cfg.temperature, cfg.repetition_penalty, cfg.top_k, cfg.top_p)
 
 
 def test_parse_generation_config_clamps_top_p_to_valid_range():
