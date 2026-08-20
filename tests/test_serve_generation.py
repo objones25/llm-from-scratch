@@ -2,12 +2,14 @@ import pytest
 import torch
 
 from llmtrain.data.chat import format_chat_history
-from llmtrain.data.tokenizer import train_tokenizer
+from llmtrain.data.tokenizer import PAD_TOKEN, train_tokenizer
+from llmtrain.generate import generate_token_ids
 from llmtrain.model.transformer import TransformerLM
 from llmtrain.serve.generation import (
     MAX_NEW_TOKENS_CEILING,
     load_model_and_tokenizer,
     parse_generation_config,
+    stream_chat_completion,
     truncate_to_context_window,
     validate_messages,
 )
@@ -184,3 +186,92 @@ def test_load_model_and_tokenizer_honors_explicit_tokenizer_path(tmp_path):
         str(checkpoint_path), str(tokenizer_path)
     )
     assert loaded_tokenizer.get_vocab_size() == tokenizer.get_vocab_size()
+
+
+class _StopsAtPadModel(torch.nn.Module):
+    """Always emits pad_id as position N's argmax, real tokens elsewhere."""
+
+    def __init__(self, vocab_size: int, pad_id: int, stop_at: int):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.pad_id = pad_id
+        self.stop_at = stop_at
+        self.calls = 0
+        self._unused = torch.nn.Parameter(torch.zeros(1))
+
+    def forward(self, input_ids, cache=None):
+        batch_size, seq_len = input_ids.shape
+        logits = torch.full((batch_size, seq_len, self.vocab_size), -10.0)
+        chosen_id = self.pad_id if self.calls >= self.stop_at else 0
+        logits[:, -1, chosen_id] = 10.0
+        self.calls += 1
+        return logits
+
+    def parameters(self, recurse=True):
+        return iter([self._unused])
+
+
+def test_stream_chat_completion_yields_text_and_stops_at_pad_token():
+    tokenizer = train_tokenizer(["hello world", "hello there"], vocab_size=32)
+    pad_id = tokenizer.token_to_id(PAD_TOKEN)
+    model = _StopsAtPadModel(vocab_size=tokenizer.get_vocab_size(), pad_id=pad_id, stop_at=2)
+    messages = [{"role": "user", "content": "hello"}]
+
+    chunks = list(
+        stream_chat_completion(
+            model,
+            tokenizer,
+            messages,
+            GenerationConfig(max_new_tokens=5, temperature=0.0),
+            max_seq_len=2048,
+        )
+    )
+
+    assert len(chunks) == 2
+    assert all(isinstance(c, str) and c for c in chunks)
+
+
+def test_stream_chat_completion_matches_generate_token_ids_output():
+    torch.manual_seed(0)
+    tokenizer = train_tokenizer(["hello world", "hello there", "world hello there"], vocab_size=32)
+    config = ModelConfig(
+        vocab_size=tokenizer.get_vocab_size(), d_model=8, n_layers=2, n_heads=4, n_kv_heads=2
+    )
+    model = TransformerLM(config)
+    generation_cfg = GenerationConfig(max_new_tokens=5, temperature=0.0)
+    messages = [{"role": "user", "content": "hello"}]
+
+    streamed_text = "".join(
+        stream_chat_completion(model, tokenizer, messages, generation_cfg, max_seq_len=2048)
+    )
+
+    prompt = format_chat_history(messages)
+    expected_ids = generate_token_ids(model, tokenizer, prompt, generation_cfg)
+    prompt_len = len(tokenizer.encode(prompt).ids)
+    expected_text = tokenizer.decode(expected_ids[prompt_len:])
+
+    assert streamed_text == expected_text
+
+
+def test_stream_chat_completion_validates_messages_before_any_model_call():
+    tokenizer = train_tokenizer(["hello world"], vocab_size=32)
+    model = _StopsAtPadModel(vocab_size=tokenizer.get_vocab_size(), pad_id=0, stop_at=0)
+    with pytest.raises(ValueError):
+        list(
+            stream_chat_completion(
+                model, tokenizer, [], GenerationConfig(max_new_tokens=5), max_seq_len=2048
+            )
+        )
+    assert model.calls == 0
+
+
+def test_stream_chat_completion_yields_nothing_when_max_new_tokens_is_zero():
+    tokenizer = train_tokenizer(["hello world"], vocab_size=32)
+    model = _StopsAtPadModel(vocab_size=tokenizer.get_vocab_size(), pad_id=0, stop_at=0)
+    messages = [{"role": "user", "content": "hello"}]
+    chunks = list(
+        stream_chat_completion(
+            model, tokenizer, messages, GenerationConfig(max_new_tokens=0), max_seq_len=2048
+        )
+    )
+    assert chunks == []
