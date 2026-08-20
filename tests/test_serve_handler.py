@@ -1,6 +1,6 @@
 import pytest
 
-from llmtrain.serve import handler
+from llmtrain.serve import generation, handler
 
 
 @pytest.fixture(autouse=True)
@@ -57,3 +57,61 @@ def test_handler_yields_structured_error_on_invalid_input(monkeypatch):
     chunks = list(handler.handler(job))
 
     assert chunks == [{"error": "messages must be a non-empty list", "done": True}]
+
+
+def test_handler_yields_structured_error_on_malformed_generation_config(monkeypatch):
+    # parse_generation_config does bare int()/float() coercion on client-supplied
+    # values; a payload like {"max_new_tokens": "abc"} raises ValueError/TypeError.
+    # Before this fix, parse_generation_config was called before the try block, so
+    # this propagated uncaught instead of becoming a structured error response.
+    monkeypatch.setattr(handler, "_get_model_and_tokenizer", lambda: ("fake-model", "fake-tok"))
+
+    job = {"input": {"messages": [{"role": "user", "content": "hi"}], "max_new_tokens": "abc"}}
+    chunks = list(handler.handler(job))
+
+    assert len(chunks) == 1
+    assert chunks[0]["done"] is True
+    assert "error" in chunks[0]
+
+
+@pytest.mark.parametrize("bad_input", ["not a dict", ["also", "not", "a", "dict"], None, 42])
+def test_handler_treats_non_dict_input_as_missing_messages(monkeypatch, bad_input):
+    # RunPod's job["input"] is client-controlled; a non-dict input used to hit
+    # payload.get(...) directly and raise an uncaught AttributeError. It should
+    # instead degrade to "no messages provided" and surface as a structured error.
+    monkeypatch.setattr(handler, "_get_model_and_tokenizer", lambda: ("fake-model", "fake-tok"))
+
+    job = {"input": bad_input}
+    chunks = list(handler.handler(job))
+
+    assert len(chunks) == 1
+    assert chunks[0]["done"] is True
+    assert "error" in chunks[0]
+
+
+def test_handler_clamps_max_new_tokens_before_calling_stream_chat_completion(monkeypatch):
+    monkeypatch.setattr(handler, "_get_model_and_tokenizer", lambda: ("fake-model", "fake-tok"))
+
+    captured_calls = []
+
+    def fake_stream_chat_completion(model, tokenizer, messages, generation_cfg, max_seq_len):
+        captured_calls.append(generation_cfg)
+        return iter([])
+
+    monkeypatch.setattr(handler.generation, "stream_chat_completion", fake_stream_chat_completion)
+
+    requested_max_new_tokens = generation.MAX_NEW_TOKENS_CEILING + 1000
+    job = {
+        "input": {
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_new_tokens": requested_max_new_tokens,
+        }
+    }
+    list(handler.handler(job))
+
+    assert len(captured_calls) == 1
+    # The handler must pass the *clamped* value through to stream_chat_completion --
+    # not the raw client-requested value -- since max_new_tokens is the main
+    # cost-control property the whole API design depends on.
+    assert captured_calls[0].max_new_tokens == generation.MAX_NEW_TOKENS_CEILING
+    assert captured_calls[0].max_new_tokens != requested_max_new_tokens
