@@ -110,6 +110,13 @@ s3.py                   # resolve_local_path()/sibling_path(): --checkpoint/--to
                        # the AWS_ENDPOINT_URL_S3/AWS_DEFAULT_REGION env vars (botocore >=1.31 resolves
                        # these automatically), so a RunPod S3 API key pair plus those two vars in .env is
                        # enough — no endpoint config in code.
+serve/generation.py    # RunPod-SDK-free inference core: validate_messages, truncate_to_context_window,
+                       # parse_generation_config, load_model_and_tokenizer, stream_chat_completion --
+                       # reuses generate.py's _sample/KVCache/PAD_TOKEN rather than duplicating them
+serve/handler.py        # Thin RunPod Python SDK adapter (runpod.serverless.start) -- parses job
+                       # input, calls generation.stream_chat_completion, yields RunPod's streaming
+                       # chunk shape. Imports runpod lazily, only inside `if __name__ == "__main__"`,
+                       # so generation.py and this file's own module scope stay runpod-free for tests.
 logging_config.py       # dictConfig: stdout + JSONL file handler
 ```
 
@@ -155,6 +162,16 @@ Three sequential CLI stages, run in order against an SFT checkpoint, each indepe
 3. **`training/dpo.py`** trains with TRL's `DPOTrainer`/`DPOConfig` against the kept pairs, via `model/hf_wrapper.py`'s `TransformerLMForCausalLM` wrapping for both the policy model and an explicitly-constructed `ref_model` (required — TRL's automatic `ref_model=None` path expects a real Hub-loadable model id, which this project's checkpoints aren't). No `--resume`: real runs so far are ~17 optimizer steps, so wiring up TRL's `resume_from_checkpoint` (which exists and would work) isn't worth the complexity yet — revisit if a run's wall-clock time ever becomes a meaningful fraction of an hour. `export_checkpoint()` saves the final result once, through this project's own `checkpoint.py` format, and the resulting `step_N.pt`'s step number is TRL's own `trainer.state.global_step` from this short run, not a continuation of the SFT step count — write to a separate `--checkpoint-dir` from the SFT run to avoid colliding on `step_N.pt` filenames.
 
 See `docs/training-guide.md` for the exact commands and `docs/dpo-run-results.md` for a worked example run (including a real judge.py double-invocation data-corruption incident that's why the `--resume`-before-rerunning rule above exists).
+
+## Inference serving
+
+`src/llmtrain/serve/` serves a checkpoint (currently `dpo-checkpoints/step_176.pt`) as a stateless,
+streaming, multi-turn chat API on RunPod Serverless — see
+`docs/superpowers/specs/2026-08-19-inference-serving-design.md` for the full design (why
+stateless, why no cross-request KV-cache, deployment config) and
+`docs/superpowers/plans/2026-08-19-inference-serving.md` for the implementation plan. The API is
+stateless by design: the client resends the full message history every call, and
+`model/cache.py`'s `KVCache` stays request-scoped, never persisted across requests.
 
 ## Device handling (MPS vs CUDA)
 
